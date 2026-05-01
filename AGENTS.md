@@ -2,6 +2,12 @@
 
 This is the vendor-neutral brief for coding agents working in `lab-router`.
 
+**General conventions, project narrative, and shared decisions live in
+the sibling repo [`../dev-commons/`](../dev-commons/).** Read at least
+[`../dev-commons/CONTEXT.md`](../dev-commons/CONTEXT.md) and
+[`../dev-commons/STYLE.md`](../dev-commons/STYLE.md) before substantive
+work here. This file covers what's specific to `lab-router`.
+
 ## Project Purpose
 
 `lab-router` builds and configures a simple lab router virtual appliance. It is
