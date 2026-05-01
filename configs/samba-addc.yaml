@@ -30,6 +30,9 @@ router:
           - name: samba-dc3
             mac: 00:15:5D:0A:0A:16
             ip: 10.10.10.22
+          - name: smbproxy-1
+            mac: 00:15:5D:0A:0A:1E
+            ip: 10.10.10.30
       dns:
         delegations:
           - zone: lab.test
