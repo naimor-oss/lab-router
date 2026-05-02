@@ -13,6 +13,16 @@ needed to stand up repeatable labs quickly:
 The current implementation uses a Debian 13 generic-cloud image, cloud-init,
 nftables, and dnsmasq. Hyper-V is the first supported hypervisor target.
 
+## Where do I start?
+
+| If you want to … | Read |
+| --- | --- |
+| **Build a router VM** for a fresh lab | The "Quick Start" section below |
+| Understand the **YAML config schema** the stager consumes | [`docs/configuration.md`](docs/configuration.md) |
+| Look up **shared coding/docs conventions** | [`../dev-commons/STYLE.md`](../dev-commons/STYLE.md) |
+| Understand the **sibling-repo split** | [`../dev-commons/REPO-SPLIT.md`](../dev-commons/REPO-SPLIT.md) |
+| See **which hypervisors are validated** | [`../dev-commons/SUPPORTED-ENVIRONMENTS.md`](../dev-commons/SUPPORTED-ENVIRONMENTS.md) |
+
 ## Repository Map
 
 | Path | Purpose |

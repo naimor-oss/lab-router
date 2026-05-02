@@ -1,11 +1,43 @@
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# Icon must end with two \r
+Icon
+
+# Thumbnails
 ._*
-*.iso
-*.qcow2
-*.vhdx
-*.log
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Private local coding-agent workspaces and settings.
 .claude/
 .codex/
 .cursor/
 .continue/
 .aider*
+
+# Image artifacts the stager downloads / produces (multi-MB to multi-GB).
+*.iso
+*.qcow2
+*.vhdx
+*.log
+
+# Backend / production credential files must never leave the builder's
+# machine. Defensive entry — lab-router doesn't currently carry creds,
+# but the rule is shared across siblings (dev-commons/STYLE.md §9).
+*creds*

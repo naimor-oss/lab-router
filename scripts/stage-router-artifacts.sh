@@ -42,7 +42,8 @@ USERNAME=''
 CONFIG_FILE=''
 SSH_PUBKEY_FILE=''
 STAGE_DIR=''
-DEBIAN_URL='https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2'
+ARCH='amd64'           # only amd64 implemented today; arm64 expected per dev-commons/CONTEXT.md
+DEBIAN_URL=''           # derived from $ARCH after arg parse, see below
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SEED_SRC="$REPO_DIR/templates/cloud-init"
@@ -70,6 +71,10 @@ Options:
                            (default: current macOS user, $(id -un))
   -k, --pubkey FILE        SSH public key path (default: ~/.ssh/id_ed25519.pub)
   -s, --stage-dir DIR      staging dir (default: /Volumes/ISO)
+  -a, --arch ARCH          Debian cloud-image architecture (default: $ARCH).
+                           Only 'amd64' is implemented today; 'arm64' is
+                           expected within ~6 months per
+                           dev-commons/CONTEXT.md.
       --extra-dnsmasq FILE append raw dnsmasq snippet (merged with YAML
                            reservations/delegations if --config is also set)
   -h, --help               show this
@@ -93,11 +98,21 @@ while [[ $# -gt 0 ]]; do
         -u|--user)        USERNAME="$2";        shift 2 ;;
         -k|--pubkey)      SSH_PUBKEY_FILE="$2"; shift 2 ;;
         -s|--stage-dir)   STAGE_DIR="$2";       shift 2 ;;
+        -a|--arch)        ARCH="$2";            shift 2 ;;
         --extra-dnsmasq)  EXTRA_DNSMASQ_FILE="$2"; shift 2 ;;
         -h|--help)        usage; exit 0 ;;
         *)                die "unknown arg: $1" ;;
     esac
 done
+
+# Today only amd64 is implemented end-to-end. arm64 will land when the
+# first arm64 appliance does (per dev-commons/SUPPORTED-ENVIRONMENTS.md);
+# the interface accepts it now so call-sites don't need to change.
+case "$ARCH" in
+    amd64) DEBIAN_URL="https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2" ;;
+    arm64) die "arm64 staging not implemented yet — see dev-commons/CONTEXT.md for the timeline" ;;
+    *)     die "unsupported --arch: $ARCH (allowed: amd64, arm64)" ;;
+esac
 
 # Values from YAML fill in anything CLI flags didn't set. dnsmasq-relevant
 # fields (reservations, delegations) are rendered into YAML_DNSMASQ_BLOCK
@@ -215,7 +230,12 @@ echo "  config:       ${CONFIG_FILE:-<none>}"
 echo "  extra dnsmasq: ${EXTRA_DNSMASQ_FILE:-<none>}"
 
 # 1. base VHDX (shared across all router VMs)
-CACHE_QCOW2="$STAGE_DIR/debian-13-genericcloud-amd64.qcow2"
+# Cache filename includes the arch so an amd64 cache and an arm64 cache
+# can coexist when arm64 lands. The output VHDX name stays
+# arch-neutral because Hyper-V picks the matching CPU type from the
+# image at runtime; differentiating in the filename would force a
+# corresponding rename in New-LabRouter.ps1's default path.
+CACHE_QCOW2="$STAGE_DIR/debian-13-genericcloud-${ARCH}.qcow2"
 OUT_VHDX="$STAGE_DIR/debian-13-router-base.vhdx"
 
 if [[ ! -f "$OUT_VHDX" ]]; then
