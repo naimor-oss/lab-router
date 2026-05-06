@@ -48,6 +48,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SEED_SRC="$REPO_DIR/templates/cloud-init"
 
+# Pure helpers (substitute_template, derive_dhcp_pool, derive_subnet_cidr,
+# arch_to_debian_url) — extracted into a sourceable library so
+# tests/unit-helpers.sh can pin their string output.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib-derive.sh"
+
 die() { echo "error: $*" >&2; exit 1; }
 
 usage() {
@@ -107,12 +113,10 @@ done
 
 # Today only amd64 is implemented end-to-end. arm64 will land when the
 # first arm64 appliance does (per dev-commons/SUPPORTED-ENVIRONMENTS.md);
-# the interface accepts it now so call-sites don't need to change.
-case "$ARCH" in
-    amd64) DEBIAN_URL="https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2" ;;
-    arm64) die "arm64 staging not implemented yet — see dev-commons/CONTEXT.md for the timeline" ;;
-    *)     die "unsupported --arch: $ARCH (allowed: amd64, arm64)" ;;
-esac
+# arch_to_debian_url accepts it as the interface but errors out today.
+if ! DEBIAN_URL=$(arch_to_debian_url "$ARCH" 2>&1); then
+    die "$DEBIAN_URL"
+fi
 
 # Values from YAML fill in anything CLI flags didn't set. dnsmasq-relevant
 # fields (reservations, delegations) are rendered into YAML_DNSMASQ_BLOCK
@@ -184,17 +188,16 @@ done
 # Auto-derive DHCP pool endpoints from LAN_IP if not supplied.
 # E.g. 10.10.10.1 -> 10.10.10.100 / 10.10.10.200
 if [[ -z "$DHCP_START" || -z "$DHCP_END" ]]; then
-    IFS='.' read -r a b c _d <<< "$LAN_IP"
-    [[ -z "$DHCP_START" ]] && DHCP_START="${a}.${b}.${c}.100"
-    [[ -z "$DHCP_END"   ]] && DHCP_END="${a}.${b}.${c}.200"
+    read -r derived_start derived_end <<< "$(derive_dhcp_pool "$LAN_IP")"
+    [[ -z "$DHCP_START" ]] && DHCP_START="$derived_start"
+    [[ -z "$DHCP_END"   ]] && DHCP_END="$derived_end"
 fi
 
 FQDN="${HOSTNAME}.${DOMAIN}"
 PUBKEY_CONTENT="$(tr -d '\n' < "$SSH_PUBKEY_FILE")"
 
-# Derive subnet/cidr string "10.10.10.0/24"
-IFS='.' read -r a b c _d <<< "$LAN_IP"
-LAN_SUBNET_CIDR="${a}.${b}.${c}.0/${LAN_PREFIX}"
+# Subnet/CIDR string for operator info + future template use.
+LAN_SUBNET_CIDR=$(derive_subnet_cidr "$LAN_IP" "$LAN_PREFIX")
 
 # Merge dnsmasq content from (a) YAML-rendered reservations/delegations and
 # (b) --extra-dnsmasq raw snippet. Both get the same 6-space indent so they
@@ -268,24 +271,10 @@ SEED_OUT="$STAGE_DIR/${HOSTNAME}-seed.iso"
 
 echo "-> generating seed ISO for $HOSTNAME"
 
-substitute() {
-    # Streaming sed with all placeholders
-    sed \
-        -e "s|@@HOSTNAME@@|$HOSTNAME|g" \
-        -e "s|@@FQDN@@|$FQDN|g" \
-        -e "s|@@DOMAIN@@|$DOMAIN|g" \
-        -e "s|@@LAN_IP@@|$LAN_IP|g" \
-        -e "s|@@LAN_PREFIX@@|$LAN_PREFIX|g" \
-        -e "s|@@LAN_SUBNET_CIDR@@|$LAN_SUBNET_CIDR|g" \
-        -e "s|@@DHCP_START@@|$DHCP_START|g" \
-        -e "s|@@DHCP_END@@|$DHCP_END|g" \
-        -e "s|@@USERNAME@@|$USERNAME|g" \
-        -e "s|@@SSH_PUBKEY@@|$PUBKEY_CONTENT|g" \
-        "$1"
-}
-
-substitute "$SEED_SRC/meta-data.tpl"       > "$SEED_BUILD_DIR/meta-data"
-substitute "$SEED_SRC/network-config.tpl"  > "$SEED_BUILD_DIR/network-config"
+# substitute_template comes from lib-derive.sh — reads the placeholders
+# from same-named env vars (HOSTNAME, FQDN, DOMAIN, LAN_IP, ...).
+substitute_template "$SEED_SRC/meta-data.tpl"       > "$SEED_BUILD_DIR/meta-data"
+substitute_template "$SEED_SRC/network-config.tpl"  > "$SEED_BUILD_DIR/network-config"
 
 # user-data.tpl has a multi-line @@EXTRA_DNSMASQ@@ placeholder that sed can't
 # easily insert multi-line content for. awk -v can't hold a multi-line value
@@ -299,7 +288,7 @@ awk '
         next
     }
     { print }
-' "$SEED_SRC/user-data.tpl" | substitute /dev/stdin > "$SEED_BUILD_DIR/user-data"
+' "$SEED_SRC/user-data.tpl" | substitute_template /dev/stdin > "$SEED_BUILD_DIR/user-data"
 
 # hdiutil makehybrid refuses to overwrite; remove any prior copy first.
 rm -f "$SEED_OUT"
