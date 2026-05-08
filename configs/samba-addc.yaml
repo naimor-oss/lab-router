@@ -33,6 +33,12 @@ router:
           - name: smbproxy-1
             mac: 00:15:5D:0A:0A:1E
             ip: 10.10.10.30
+          # appliance-core blank test VM. Reservation is harmless when
+          # core-1 isn't running; lab.test zone delegation below stays
+          # pointed at the AD DCs because the blank doesn't host DNS.
+          - name: core-1
+            mac: 00:15:5D:0A:0A:28
+            ip: 10.10.10.40
       dns:
         delegations:
           - zone: lab.test
