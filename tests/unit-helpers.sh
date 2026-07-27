@@ -184,8 +184,8 @@ fi
 
 # Adversarial: a placeholder value containing characters that would
 # have broken the previous sed-based implementation. The current
-# bash-parameter-expansion implementation has no metacharacter
-# problem — values with '|', '/', '&', '\' all flow through verbatim.
+# bash-parameter-expansion implementation disables Bash 5.2+'s
+# special '&' replacement mode, so '|', '/', '&', '\' flow through verbatim.
 #
 # Specifically pin the '|' case: under BSD sed it could trigger the
 # `w filename` flag and silently write files (caught 2026-05-06 when

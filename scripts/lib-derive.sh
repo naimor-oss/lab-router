@@ -57,10 +57,21 @@ derive_subnet_cidr() {
 # sed's parsing AND in BSD sed could trigger the `w filename` flag,
 # silently writing files. tests/unit-helpers.sh caught this on
 # 2026-05-06 (it created a literal file 'ithpipe|g' as a side effect
-# of running). Bash parameter expansion has no metacharacter problem.
+# of running). Bash parameter expansion avoids delimiter parsing;
+# substitute_template disables Bash 5.2+'s special '&' replacement mode.
 substitute_template() {
     local file="$1"
     local content
+    local restore_patsub_replacement=0
+
+    # Bash 5.2+ may expand '&' in replacement strings to the matched
+    # placeholder. Bash 3.2 treats it literally. Disable the newer
+    # behavior for this transform, then restore the caller's setting.
+    if shopt -q patsub_replacement 2>/dev/null; then
+        shopt -u patsub_replacement
+        restore_patsub_replacement=1
+    fi
+
     # Read whole file. printf '%s' avoids a trailing newline being
     # added/dropped by command substitution; the explicit final
     # newline keeps the caller's contract (sed printed the file
@@ -76,6 +87,10 @@ substitute_template() {
     content="${content//@@DHCP_END@@/${DHCP_END:-}}"
     content="${content//@@USERNAME@@/${USERNAME:-}}"
     content="${content//@@SSH_PUBKEY@@/${PUBKEY_CONTENT:-}}"
+
+    if [[ "$restore_patsub_replacement" == "1" ]]; then
+        shopt -s patsub_replacement
+    fi
     printf '%s\n' "$content"
 }
 
