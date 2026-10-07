@@ -66,6 +66,15 @@ substitute_template() {
     # newline keeps the caller's contract (sed printed the file
     # contents, including a trailing newline) intact.
     content=$(<"$file")
+    # Bash 5.2+ (Debian 13, current Git for Windows) treats an unquoted
+    # `&` in a ${var//pat/rep} replacement as the matched text. Quoting
+    # the replacement would leak literal quotes on bash <=4.2 (macOS
+    # 3.2), so switch the option off where it exists instead.
+    local restore_patsub=""
+    if shopt -q patsub_replacement 2>/dev/null; then
+        shopt -u patsub_replacement
+        restore_patsub=1
+    fi
     content="${content//@@HOSTNAME@@/${HOSTNAME:-}}"
     content="${content//@@FQDN@@/${FQDN:-}}"
     content="${content//@@DOMAIN@@/${DOMAIN:-}}"
@@ -76,6 +85,7 @@ substitute_template() {
     content="${content//@@DHCP_END@@/${DHCP_END:-}}"
     content="${content//@@USERNAME@@/${USERNAME:-}}"
     content="${content//@@SSH_PUBKEY@@/${PUBKEY_CONTENT:-}}"
+    [[ -n "$restore_patsub" ]] && shopt -s patsub_replacement
     printf '%s\n' "$content"
 }
 
