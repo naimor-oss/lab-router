@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #===============================================================================
-# stage-router-artifacts.sh - Mac-side staging for the lab router VM
+# stage-router-artifacts.sh - workstation-side staging (WSL2 or macOS) for the lab router VM
 #
-# Produces two files on the ISO share (/Volumes/ISO by default, = D:\ISO\
+# Produces two files on the ISO share (/mnt/d/ISO on WSL2, /Volumes/ISO on
+# macOS, = D:\ISO\
 # on the Hyper-V host):
 #
 #   debian-13-router-base.vhdx    (~1.2 GB - Debian genericcloud qcow2 converted)
@@ -45,6 +46,12 @@ STAGE_DIR=''
 ARCH='amd64'           # only amd64 implemented today; arm64 expected per dev-commons/CONTEXT.md
 DEBIAN_URL=''           # derived from $ARCH after arg parse, see below
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Workstation portability (WSL2 on Windows 11, or macOS): ISO share path,
+# seed ISO builder, checksums. lab-kit is a sibling checkout.
+LAB_KIT_DIR="${LAB_KIT_DIR:-$SCRIPT_DIR/../../lab-kit}"
+# shellcheck disable=SC1091
+source "$LAB_KIT_DIR/lib/lab-host.sh" 2>/dev/null \
+    || { echo "error: lab-kit not found at $LAB_KIT_DIR (clone it next to this repo)" >&2; exit 1; }
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SEED_SRC="$REPO_DIR/templates/cloud-init"
 
@@ -66,7 +73,7 @@ Options:
                            the options below; CLI flags still override.
                            Also renders DHCP reservations + DNS delegations
                            from the YAML into the router's dnsmasq config.
-                           Requires yq (brew install yq).
+                           Requires yq (mikefarah yq v4: brew install yq; on WSL2 install the release binary from github.com/mikefarah/yq).
   -n, --hostname NAME      router hostname (default: router1)
   -i, --lan-ip IP          router LAN IP (default: 10.10.10.1)
   -p, --lan-prefix N       LAN CIDR prefix length (default: 24)
@@ -76,7 +83,8 @@ Options:
   -u, --user NAME          admin username to create on the router
                            (default: current macOS user, $(id -un))
   -k, --pubkey FILE        SSH public key path (default: ~/.ssh/id_ed25519.pub)
-  -s, --stage-dir DIR      staging dir (default: /Volumes/ISO)
+  -s, --stage-dir DIR      staging dir (default: /mnt/d/ISO on WSL2,
+                           /Volumes/ISO on macOS, or $LAB_ISO_DIR)
   -a, --arch ARCH          Debian cloud-image architecture (default: $ARCH).
                            Only 'amd64' is implemented today; 'arm64' is
                            expected within ~6 months per
@@ -124,7 +132,7 @@ fi
 # are supported for now; multi-LAN YAMLs error out cleanly.
 YAML_DNSMASQ_BLOCK=''
 if [[ -n "$CONFIG_FILE" ]]; then
-    command -v yq >/dev/null || die "--config requires yq (brew install yq)"
+    command -v yq >/dev/null || die "--config requires yq (mikefarah yq v4: brew install yq; on WSL2 install the release binary from github.com/mikefarah/yq)"
     [[ -f "$CONFIG_FILE" ]] || die "config not found: $CONFIG_FILE"
 
     lan_count=$(yq '.router.lans | length' "$CONFIG_FILE")
@@ -172,11 +180,10 @@ fi
 [[ -z "$DOMAIN"          ]] && DOMAIN='lab.test'
 [[ -z "$USERNAME"        ]] && USERNAME="$(id -un)"
 [[ -z "$SSH_PUBKEY_FILE" ]] && SSH_PUBKEY_FILE="$HOME/.ssh/id_ed25519.pub"
-[[ -z "$STAGE_DIR"       ]] && STAGE_DIR='/Volumes/ISO'
+[[ -z "$STAGE_DIR"       ]] && STAGE_DIR="$(lab_iso_dir)"
 
 # sanity
-command -v qemu-img >/dev/null || die "qemu-img not on PATH (brew install qemu)"
-command -v hdiutil  >/dev/null || die "hdiutil missing (should be built-in on macOS)"
+lab_need_tool qemu-img qemu-utils qemu
 command -v curl     >/dev/null || die "curl not on PATH"
 [[ -d "$STAGE_DIR" ]] || die "stage dir not mounted: $STAGE_DIR"
 [[ -f "$SSH_PUBKEY_FILE" ]] || die "ssh pubkey not found: $SSH_PUBKEY_FILE"
@@ -290,11 +297,8 @@ awk '
     { print }
 ' "$SEED_SRC/user-data.tpl" | substitute_template /dev/stdin > "$SEED_BUILD_DIR/user-data"
 
-# hdiutil makehybrid refuses to overwrite; remove any prior copy first.
 rm -f "$SEED_OUT"
-hdiutil makehybrid -iso -joliet \
-    -default-volume-name CIDATA \
-    -o "$SEED_OUT" "$SEED_BUILD_DIR" >/dev/null
+lab_make_seed_iso "$SEED_OUT" "$SEED_BUILD_DIR"
 
 rm -rf "$SEED_BUILD_DIR"
 echo "-> wrote $SEED_OUT ($(du -h "$SEED_OUT" | cut -f1))"

@@ -13,6 +13,13 @@ needed to stand up repeatable labs quickly:
 The current implementation uses a Debian 13 generic-cloud image, cloud-init,
 nftables, and dnsmasq. Hyper-V is the first supported hypervisor target.
 
+> **Workstation (2026-10):** the supported workstation is Windows 11 with
+> WSL2 and Hyper-V. Set it up with
+> [`../dev-commons/WSL2-LAB-SETUP.md`](../dev-commons/WSL2-LAB-SETUP.md);
+> the lab scripts pick the ISO share path, seed-ISO builder and checksum
+> tool through `lab-kit/lib/lab-host.sh` (`/mnt/d/ISO` on WSL2). The
+> macOS instructions below still describe the legacy Mac workflow.
+
 ## Where do I start?
 
 | If you want to … | Read |
