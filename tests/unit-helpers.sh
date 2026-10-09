@@ -60,7 +60,7 @@ check_eq "10.10.10.1 -> 10.10.10.100/200" \
 check_eq "10.10.20.1 -> 10.10.20.100/200" \
     "10.10.20.100 10.10.20.200" "$(derive_dhcp_pool 10.10.20.1)"
 check_eq "router on .254 still picks .100/.200 (not .254-relative)" \
-    "172.29.137.100 172.29.137.200" "$(derive_dhcp_pool 172.29.137.254)"
+    "172.20.50.100 172.20.50.200" "$(derive_dhcp_pool 172.20.50.254)"
 check_eq "ignores prefix-irrelevant fourth octet" \
     "10.10.10.100 10.10.10.200" "$(derive_dhcp_pool 10.10.10.99)"
 
@@ -70,8 +70,8 @@ check_eq "ignores prefix-irrelevant fourth octet" \
 echo "== derive_subnet_cidr =="
 check_eq "10.10.10.1 /24 -> 10.10.10.0/24" \
     "10.10.10.0/24" "$(derive_subnet_cidr 10.10.10.1 24)"
-check_eq "172.29.137.5 /24 -> 172.29.137.0/24" \
-    "172.29.137.0/24" "$(derive_subnet_cidr 172.29.137.5 24)"
+check_eq "172.20.50.5 /24 -> 172.20.50.0/24" \
+    "172.20.50.0/24" "$(derive_subnet_cidr 172.20.50.5 24)"
 # Adversarial: /16 prefix exposes the /24-boundary assumption. The
 # helper still returns "<a>.<b>.<c>.0/16" — wrong network address by
 # convention, but acceptable today because LAN_SUBNET_CIDR is only
@@ -125,7 +125,7 @@ LAN_PREFIX=24
 LAN_SUBNET_CIDR=10.10.10.0/24
 DHCP_START=10.10.10.100
 DHCP_END=10.10.10.200
-USERNAME=hooman
+USERNAME=labadmin
 PUBKEY_CONTENT='ssh-ed25519 AAAA...test'
 
 fixture=$(mktemp /tmp/router-tpl-XXXX.tpl)
@@ -158,8 +158,8 @@ check_eq "@@LAN_SUBNET_CIDR@@ -> 10.10.10.0/24" \
     "cidr: 10.10.10.0/24" "$(grep '^cidr:' <<< "$out")"
 check_eq "@@DHCP_START@@ + @@DHCP_END@@" \
     "pool: 10.10.10.100 - 10.10.10.200" "$(grep '^pool:' <<< "$out")"
-check_eq "@@USERNAME@@ -> hooman" \
-    "user: hooman" "$(grep '^user:' <<< "$out")"
+check_eq "@@USERNAME@@ -> labadmin" \
+    "user: labadmin" "$(grep '^user:' <<< "$out")"
 check_eq "@@SSH_PUBKEY@@ -> the pubkey content" \
     "key: ssh-ed25519 AAAA...test" "$(grep '^key:' <<< "$out")"
 

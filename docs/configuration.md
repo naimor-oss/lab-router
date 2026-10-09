@@ -27,7 +27,7 @@ The implemented shape (single-LAN only today):
 router:
   hostname: router1
   domain: lab.test
-  user: hooman           # optional; defaults to `id -un` on the Mac
+  user: labadmin           # optional; defaults to `id -un` on the Mac
   wan:
     mode: dhcp
     switch: "PCI 1G Port 1"    # read by Hyper-V helper, not stager
