@@ -20,7 +20,7 @@ ssh_pwauth: false
 disable_root: true
 
 package_update: true
-package_upgrade: false
+package_upgrade: true
 packages:
   - nftables
   - dnsmasq
