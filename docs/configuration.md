@@ -35,7 +35,7 @@ router:
     # gateway: 192.168.250.1      # static only
     dns: [1.1.1.1, 8.8.8.8]    # optional; upstream resolvers (the default)
     mac: 00:15:5D:0A:0A:01     # optional; pins eth0 to this MAC
-    switch: "PCI 1G Port 1"    # read by Hyper-V helper, not stager
+    switch: External    # read by Hyper-V helper, not stager
   lans:
     - name: lab
       switch: Lab-NAT          # read by Hyper-V helper, not stager
