@@ -291,7 +291,14 @@ lab_make_seed_iso "$SEED_OUT" "$SEED_BUILD_DIR"
 rm -rf "$SEED_BUILD_DIR"
 echo "-> wrote $SEED_OUT ($(du -h "$SEED_OUT" | cut -f1))"
 
+# The ISO share as the Hyper-V host sees it: known when WSL2 stages onto a
+# local drive of the host itself, a placeholder otherwise.
+if [[ "$(lab_host_os)" == wsl && "$STAGE_DIR" == /mnt/[a-z]/* ]] && command -v wslpath >/dev/null; then
+    HOST_ISO_DIR="$(wslpath -w "$STAGE_DIR")"
+else
+    HOST_ISO_DIR='<ISO share path on the host>'
+fi
+
 echo ""
-echo "done. Build the VM with:"
-echo "  ssh <host-user>@<hyper-v-host> 'pwsh -File D:\\ISO\\lab-scripts\\New-LabRouter.ps1 \\"
-echo "      -VMName $HOSTNAME -SeedIso D:\\ISO\\${HOSTNAME}-seed.iso'"
+echo "done. On the Hyper-V host, from an elevated PowerShell:"
+echo "  & '$HOST_ISO_DIR\\lab-scripts\\New-LabRouter.ps1' -VMName $HOSTNAME -IsoDir '$HOST_ISO_DIR'"

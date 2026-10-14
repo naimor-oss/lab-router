@@ -7,70 +7,89 @@
 
 .DESCRIPTION
     The router VM is the lab's link to the outside world. It provides:
-      - NAT (nftables) from the Lab-NAT internal switch to an external switch
+      - NAT (nftables) from an internal LAN switch to an external WAN switch
       - DHCP for the lab subnet (dnsmasq)
-      - DNS forwarder to public DNS, with a delegation for `lab.test` to the
-        AD DCs (WS2025-DC1 at .10 and samba-dc1 at .20)
+      - DNS forwarding to public DNS, plus any reservations and delegations
+        rendered into the seed
 
-    Prerequisites (produced outside Hyper-V, staged onto the host at D:\ISO\):
+    Prerequisites, staged into the ISO share (-IsoDir) by
+    scripts/stage-router-artifacts.sh on the workstation:
       - debian-13-router-base.vhdx   - Debian 13 genericcloud, qcow2 to VHDX
-                                       (qemu-img convert, dynamic subformat)
-      - router1-seed.iso             - NoCloud seed (CIDATA label) with the
+      - <VMName>-seed.iso            - NoCloud seed (CIDATA label) with the
                                        cloud-init user-data/meta-data/network-config
-                                       baked into it.
-
-    Both are generated on the Mac side and copied into /Volumes/ISO (i.e.
-    D:\ISO\ on the host). See the repo's README / CLAUDE.md v2 for how.
 
     This script is idempotent: if the VM already exists it skips creation.
 
 .PARAMETER VMName
     Hyper-V VM name. Default: router1.
 
+.PARAMETER IsoDir
+    The ISO share as the Hyper-V host sees it. BaseVhdxSource and SeedIso
+    default to files in it. Default: D:\ISO.
+
 .PARAMETER BaseVhdxSource
-    Path to the shared read-only base VHDX on the host. Default:
-    D:\ISO\debian-13-router-base.vhdx.
+    Path to the shared read-only base VHDX. Default:
+    <IsoDir>\debian-13-router-base.vhdx.
 
 .PARAMETER SeedIso
-    Path to the NoCloud seed ISO. Default: D:\ISO\router1-seed.iso.
+    Path to the NoCloud seed ISO. Default: <IsoDir>\<VMName>-seed.iso.
 
 .PARAMETER LabPath
-    Root folder for per-VM files (VHDX copy, etc.). Default D:\Lab.
+    Root folder for per-VM files (VHDX copy, seed ISO copy, VM config).
+    Default: the Hyper-V host's VirtualMachinePath (Get-VMHost).
 
 .PARAMETER LanSwitchName
     Name of the internal Hyper-V switch this router's LAN attaches to.
     Created if missing. Default: Lab-NAT.
 
 .PARAMETER WanSwitchName
-    Name of the external Hyper-V switch this router's WAN attaches to.
-    Must already exist. Default: 'PCI 1G Port 1'.
+    Name of the Hyper-V switch this router's WAN attaches to. Must already
+    exist. Default: the host's only External switch; with no External
+    switch, client Hyper-V's 'Default Switch' (its DHCP needs Internet
+    Connection Sharing); otherwise the script stops and lists the switches.
 
-.PARAMETER LanHostIP / LanHostPrefix
-    The Hyper-V HOST vNIC IP on the internal switch (Windows side). Default
-    not set - the host does NOT need an IP on this switch for the lab to
-    work; the VM is the gateway.
+.PARAMETER LanHostIP
+    Optional static IPv4 address for the host's own vNIC on the LAN switch
+    (vEthernet (<LanSwitchName>)), so the host can reach the lab directly.
+    No gateway or DNS server is set on it, and it is not registered in DNS,
+    so the host's default route and resolver stay as they are. Pick an
+    address outside the router's DHCP pool. Default: not set (the host
+    vNIC is left unconfigured; the VM is the gateway either way).
 
-.PARAMETER MemoryMB / VCpu / DiskGB
-    VM resource sizing. Defaults: 1024 MB / 1 / 8 (but the base VHDX is
-    ~3 GiB already, so this is a floor).
+.PARAMETER LanHostPrefix
+    Prefix length for LanHostIP. Default: 24.
+
+.PARAMETER MemoryMB
+    Startup memory, static. Default: 1024.
+
+.PARAMETER VCpu
+    Virtual processors. Default: 1.
+
+.PARAMETER LanMacAddress
+    Optional static MAC for the LAN adapter, e.g. for a DHCP reservation
+    upstream of the lab.
 
 .EXAMPLE
     .\New-LabRouter.ps1
 
 .EXAMPLE
-    .\New-LabRouter.ps1 -VMName router2 -SeedIso D:\ISO\router2-seed.iso
+    .\New-LabRouter.ps1 -VMName router2 -IsoDir E:\Lab\ISO -WanSwitchName External -LanHostIP 10.10.20.2
 #>
 [CmdletBinding()]
 param(
     [string]$VMName         = 'router1',
-    [string]$BaseVhdxSource = 'D:\ISO\debian-13-router-base.vhdx',
-    [string]$SeedIso        = 'D:\ISO\router1-seed.iso',
-    [string]$LabPath        = 'D:\Lab',
+    [string]$IsoDir         = 'D:\ISO',
+    [string]$BaseVhdxSource = '',
+    [string]$SeedIso        = '',
+    [string]$LabPath        = '',
     [string]$LanSwitchName  = 'Lab-NAT',
-    [string]$WanSwitchName  = 'PCI 1G Port 1',
+    [string]$WanSwitchName  = '',
+    [string]$LanHostIP      = '',
+    [ValidateRange(1, 32)]
+    [int]   $LanHostPrefix  = 24,
     [int]   $MemoryMB       = 1024,
     [int]   $VCpu           = 1,
-    [string]$LanMacAddress  = ''     # optional, pinned MAC for deterministic routing
+    [string]$LanMacAddress  = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -79,31 +98,71 @@ function Write-Step { param($m) Write-Host "`n==> $m" -ForegroundColor Cyan }
 function Write-OK   { param($m) Write-Host "    + $m" -ForegroundColor Green }
 function Write-Warn { param($m) Write-Host "    ! $m" -ForegroundColor Yellow }
 
+if (-not $BaseVhdxSource) { $BaseVhdxSource = Join-Path $IsoDir 'debian-13-router-base.vhdx' }
+if (-not $SeedIso)        { $SeedIso        = Join-Path $IsoDir "$VMName-seed.iso" }
+if (-not $LabPath)        { $LabPath        = (Get-VMHost).VirtualMachinePath }
+
 # 1. SANITY CHECKS
 Write-Step "Sanity checks"
 if (-not (Test-Path $BaseVhdxSource)) {
-    throw "Base VHDX not found at $BaseVhdxSource. Stage it from the Mac side first."
+    throw "Base VHDX not found at $BaseVhdxSource. Stage it with scripts/stage-router-artifacts.sh first."
 }
 if (-not (Test-Path $SeedIso)) {
-    throw "Seed ISO not found at $SeedIso. Generate it first (hdiutil makehybrid -iso -joliet)."
+    throw "Seed ISO not found at $SeedIso. Stage it with scripts/stage-router-artifacts.sh first."
+}
+if (-not $WanSwitchName) {
+    $external = @(Get-VMSwitch -SwitchType External)
+    if ($external.Count -eq 1) {
+        $WanSwitchName = $external[0].Name
+    } elseif ($external.Count -eq 0 -and (Get-VMSwitch -Name 'Default Switch' -ErrorAction SilentlyContinue)) {
+        # Client Hyper-V's NAT switch. Its DHCP comes from Internet Connection
+        # Sharing; where policy disables ICS the WAN never gets a lease.
+        $WanSwitchName = 'Default Switch'
+        Write-Warn "No External switch; using 'Default Switch' (needs ICS). Pass -WanSwitchName to choose."
+    } else {
+        throw "Pass -WanSwitchName: found $($external.Count) External switches (" +
+              (($external.Name) -join ', ') + "). All switches: " + ((Get-VMSwitch).Name -join ', ')
+    }
 }
 if (-not (Get-VMSwitch -Name $WanSwitchName -ErrorAction SilentlyContinue)) {
-    throw "WAN switch '$WanSwitchName' not found. Existing external switches: " +
-          ((Get-VMSwitch | Where-Object SwitchType -eq 'External').Name -join ', ')
+    throw "WAN switch '$WanSwitchName' not found. Existing switches: " +
+          ((Get-VMSwitch).Name -join ', ')
 }
-Write-OK "Base VHDX: $BaseVhdxSource"
-Write-OK "Seed ISO:  $SeedIso"
+Write-OK "Base VHDX:  $BaseVhdxSource"
+Write-OK "Seed ISO:   $SeedIso"
+Write-OK "WAN switch: $WanSwitchName"
+Write-OK "VM files:   $LabPath"
 
-# 2. LAN SWITCH
+# 2. LAN SWITCH (+ optional host vNIC address)
 Write-Step "LAN switch: $LanSwitchName"
 $lanSw = Get-VMSwitch -Name $LanSwitchName -ErrorAction SilentlyContinue
 if ($lanSw) {
     Write-OK "Switch exists ($($lanSw.SwitchType))"
 } else {
-    New-VMSwitch -Name $LanSwitchName -SwitchType Internal | Out-Null
+    $lanSw = New-VMSwitch -Name $LanSwitchName -SwitchType Internal
     Write-OK "Created internal switch"
-    # Deliberately leave the host vNIC unconfigured - the VM is the sole gateway.
-    # Routing host to VM traffic only needs host vNIC up, IP optional.
+}
+
+if ($LanHostIP) {
+    if ($lanSw.SwitchType -ne 'Internal') {
+        throw "-LanHostIP needs an Internal switch; '$LanSwitchName' is $($lanSw.SwitchType)."
+    }
+    $hostIf = "vEthernet ($LanSwitchName)"
+    if (Get-NetIPAddress -InterfaceAlias $hostIf -IPAddress $LanHostIP -ErrorAction SilentlyContinue) {
+        Write-OK "Host vNIC already has $LanHostIP"
+    } else {
+        Get-NetIPAddress -InterfaceAlias $hostIf -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Remove-NetIPAddress -Confirm:$false
+        # No -DefaultGateway: the host keeps its own default route.
+        New-NetIPAddress -InterfaceAlias $hostIf -IPAddress $LanHostIP -PrefixLength $LanHostPrefix | Out-Null
+        Write-OK "Host vNIC: $LanHostIP/$LanHostPrefix on $hostIf"
+    }
+    # Keep the lab address out of whatever DNS the host registers with.
+    Set-DnsClient -InterfaceAlias $hostIf -RegisterThisConnectionsAddress $false
+} else {
+    # Left unconfigured: the VM is the sole gateway and the host needs no
+    # address on this switch for the lab to work.
+    Write-OK "Host vNIC left unconfigured (pass -LanHostIP to reach the lab from the host)"
 }
 
 # 3. SKIP IF VM ALREADY EXISTS
@@ -124,10 +183,6 @@ Copy-Item -Path $BaseVhdxSource -Destination $vhdxDest -Force
 Copy-Item -Path $SeedIso        -Destination $isoDest  -Force
 Write-OK "VHDX copied to $vhdxDest ($([math]::Round((Get-Item $vhdxDest).Length / 1MB)) MB)"
 Write-OK "Seed ISO copied to $isoDest"
-
-# Base VHDX is 3 GiB - most lab routers won't need more. If the caller set
-# a larger disk by touching the file, we respect it; we don't shrink.
-# Optional: resize if caller wants. Skipped for simplicity.
 
 # 5. CREATE GEN2 VM
 Write-Step "Creating VM: $VMName"

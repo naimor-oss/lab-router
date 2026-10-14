@@ -73,6 +73,14 @@ cp hypervisors/hyperv/New-LabRouter.ps1 /Volumes/ISO/lab-scripts/
 ssh <host-user>@<hyper-v-host> 'pwsh -File D:\ISO\lab-scripts\New-LabRouter.ps1'
 ```
 
+`New-LabRouter.ps1` reads the VHDX and `<VMName>-seed.iso` from `-IsoDir`
+(default `D:\ISO`), attaches the WAN to the host's only External switch
+(pass `-WanSwitchName` when there are several), and keeps VM files under
+Hyper-V's default VM path (`-LabPath` to change it). Add
+`-LanHostIP 10.10.10.2` to give the host itself an address on the lab LAN;
+it gets no gateway or DNS server, so the host's own networking is
+unchanged.
+
 Verify (replace `<user>` with the admin username you passed to the stager):
 
 ```bash
