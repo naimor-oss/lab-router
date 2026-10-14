@@ -81,10 +81,10 @@ Options:
       --dhcp-start IP      DHCP pool start (default: derive .100 of subnet)
       --dhcp-end IP        DHCP pool end   (default: derive .200 of subnet)
   -u, --user NAME          admin username to create on the router
-                           (default: current macOS user, $(id -un))
+                           (default: current user, $(id -un))
   -k, --pubkey FILE        SSH public key path (default: ~/.ssh/id_ed25519.pub)
   -s, --stage-dir DIR      staging dir (default: /mnt/d/ISO on WSL2,
-                           /Volumes/ISO on macOS, or $LAB_ISO_DIR)
+                           /Volumes/ISO on macOS, or \$LAB_ISO_DIR)
   -a, --arch ARCH          Debian cloud-image architecture (default: $ARCH).
                            Only 'amd64' is implemented today; 'arm64' is
                            expected within ~6 months per
