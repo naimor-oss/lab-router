@@ -42,6 +42,9 @@ DHCP_END=''
 USERNAME=''
 WAN_MAC=''
 LAN_MAC=''
+WAN_IP=''
+WAN_GATEWAY=''
+WAN_DNS=''
 CONFIG_FILE=''
 SSH_PUBKEY_FILE=''
 STAGE_DIR=''
@@ -91,6 +94,14 @@ Options:
                            Only 'amd64' is implemented today; 'arm64' is
                            expected within ~6 months per
                            dev-commons/CONTEXT.md.
+      --wan-ip ADDR/PREFIX static WAN address (default: WAN uses DHCP). For
+                           an uplink without DHCP, e.g. a host vNIC on an
+                           internal switch with WinNAT (New-LabRouter.ps1
+                           -CreateWanNat). Needs --wan-gateway.
+      --wan-gateway IP     WAN default gateway (static WAN only)
+      --wan-dns IP[,IP]    upstream resolvers dnsmasq forwards to; with a
+                           static WAN also the router's own resolvers during
+                           first boot (default: 1.1.1.1,8.8.8.8)
       --wan-mac MAC        pin the WAN (eth0) to this MAC address
       --lan-mac MAC        pin the LAN (eth1) to this MAC address
                            With either set, network-config matches that
@@ -119,6 +130,9 @@ while [[ $# -gt 0 ]]; do
         --dhcp-start)     DHCP_START="$2";      shift 2 ;;
         --dhcp-end)       DHCP_END="$2";        shift 2 ;;
         -u|--user)        USERNAME="$2";        shift 2 ;;
+        --wan-ip)         WAN_IP="$2";          shift 2 ;;
+        --wan-gateway)    WAN_GATEWAY="$2";     shift 2 ;;
+        --wan-dns)        WAN_DNS="$2";         shift 2 ;;
         --wan-mac)        WAN_MAC="$2";         shift 2 ;;
         --lan-mac)        LAN_MAC="$2";         shift 2 ;;
         -k|--pubkey)      SSH_PUBKEY_FILE="$2"; shift 2 ;;
@@ -156,6 +170,16 @@ if [[ -n "$CONFIG_FILE" ]]; then
     [[ -z "$DOMAIN"     ]] && DOMAIN=$(yq_opt   '.router.domain')
     [[ -z "$USERNAME"   ]] && USERNAME=$(yq_opt '.router.user')
     [[ -z "$WAN_MAC"    ]] && WAN_MAC=$(yq_opt  '.router.wan.mac')
+    wan_mode=$(yq_opt '.router.wan.mode')
+    case "${wan_mode:-dhcp}" in
+        dhcp)   [[ -z "$(yq_opt '.router.wan.address')" ]] \
+                    || die "$CONFIG_FILE: router.wan.address needs router.wan.mode: static" ;;
+        static) [[ -z "$WAN_IP"      ]] && WAN_IP=$(yq_opt      '.router.wan.address')
+                [[ -z "$WAN_GATEWAY" ]] && WAN_GATEWAY=$(yq_opt '.router.wan.gateway')
+                [[ -n "$WAN_IP" ]] || die "$CONFIG_FILE: router.wan.mode: static needs router.wan.address" ;;
+        *)      die "$CONFIG_FILE: router.wan.mode must be dhcp or static (got $wan_mode)" ;;
+    esac
+    [[ -z "$WAN_DNS" ]] && WAN_DNS=$(yq -r '.router.wan.dns // [] | join(",")' "$CONFIG_FILE")
     [[ -z "$LAN_MAC"    ]] && LAN_MAC=$(yq_opt  '.router.lans[0].mac')
 
     addr=$(yq_opt '.router.lans[0].address')   # "10.10.10.1/24"
@@ -194,6 +218,7 @@ fi
 [[ -z "$USERNAME"        ]] && USERNAME="$(id -un)"
 [[ -z "$SSH_PUBKEY_FILE" ]] && SSH_PUBKEY_FILE="$HOME/.ssh/id_ed25519.pub"
 [[ -z "$STAGE_DIR"       ]] && STAGE_DIR="$(lab_iso_dir)"
+[[ -z "$WAN_DNS"         ]] && WAN_DNS='1.1.1.1,8.8.8.8'
 
 # sanity
 lab_need_tool qemu-img qemu-utils qemu
@@ -217,6 +242,24 @@ fi
 if [[ -n "$WAN_MAC" ]]; then WAN_MAC=$(normalize_mac "$WAN_MAC" 2>&1) || die "--wan-mac: $WAN_MAC"; fi
 if [[ -n "$LAN_MAC" ]]; then LAN_MAC=$(normalize_mac "$LAN_MAC" 2>&1) || die "--lan-mac: $LAN_MAC"; fi
 [[ -z "$WAN_MAC" || "$WAN_MAC" != "$LAN_MAC" ]] || die "--wan-mac and --lan-mac are the same address"
+# Optional static WAN.
+if [[ -n "$WAN_IP" ]]; then
+    is_ipv4_cidr "$WAN_IP" || die "--wan-ip must be ADDR/PREFIX, e.g. 192.168.250.2/24 (got $WAN_IP)"
+    [[ -n "$WAN_GATEWAY" ]] || die "--wan-ip needs --wan-gateway"
+    is_ipv4 "$WAN_GATEWAY" || die "--wan-gateway: not an IPv4 address: $WAN_GATEWAY"
+    [[ "${WAN_IP%/*}" != "$LAN_IP" ]] || die "--wan-ip and the LAN IP are the same address"
+elif [[ -n "$WAN_GATEWAY" ]]; then
+    die "--wan-gateway needs --wan-ip (a DHCP WAN takes its gateway from the lease)"
+fi
+WAN_DNS="${WAN_DNS// /}"
+IFS=',' read -ra dns_list <<< "$WAN_DNS"
+(( ${#dns_list[@]} > 0 )) || die "--wan-dns: no resolvers given"
+for ip in "${dns_list[@]}"; do
+    is_ipv4 "$ip" || die "--wan-dns: not an IPv4 address: $ip"
+done
+WAN_IPV4_BLOCK=$(wan_ipv4_block "$WAN_IP" "$WAN_GATEWAY" "$WAN_DNS")
+UPSTREAM_DNS_BLOCK=$(upstream_dns_block "$WAN_DNS")
+
 WAN_MATCH_BLOCK=$(mac_match_block "$WAN_MAC" eth0)
 LAN_MATCH_BLOCK=$(mac_match_block "$LAN_MAC" eth1)
 
@@ -253,6 +296,8 @@ echo "  fqdn:         $FQDN"
 echo "  lan:          $LAN_IP/$LAN_PREFIX  (subnet $LAN_SUBNET_CIDR)"
 echo "  domain:       $DOMAIN"
 echo "  dhcp pool:    $DHCP_START .. $DHCP_END"
+echo "  wan:          ${WAN_IP:-dhcp}${WAN_GATEWAY:+ via $WAN_GATEWAY}"
+echo "  upstream dns: $WAN_DNS"
 echo "  wan mac:      ${WAN_MAC:-<not pinned>}"
 echo "  lan mac:      ${LAN_MAC:-<not pinned>}"
 echo "  admin user:   $USERNAME"
