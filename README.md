@@ -77,8 +77,14 @@ Verify (replace `<user>` with the admin username you passed to the stager):
 
 ```bash
 ssh -J <host-user>@<hyper-v-host> <user>@10.10.10.1 \
-    'cat /var/log/router-ready.marker; sudo nft list table ip nat'
+    'cloud-init status; cat /var/log/router-*.marker; sudo nft list table ip nat'
 ```
+
+`router-ready.marker` appears only when nftables and dnsmasq are both
+running. If first boot could not install them (typically no WAN DHCP
+lease), cloud-init writes `router-failed.marker` naming the inactive
+units, leaves the image's resolver in place, and `cloud-init status`
+reports an error.
 
 ## Current Scope
 
