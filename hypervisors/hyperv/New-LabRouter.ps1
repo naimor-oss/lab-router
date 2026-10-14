@@ -65,9 +65,17 @@
 .PARAMETER VCpu
     Virtual processors. Default: 1.
 
+.PARAMETER WanMacAddress
+    Optional static MAC for the WAN adapter (any of 00155D0A0A01,
+    00-15-5D-0A-0A-01, 00:15:5d:0a:0a:01).
+
 .PARAMETER LanMacAddress
-    Optional static MAC for the LAN adapter, e.g. for a DHCP reservation
-    upstream of the lab.
+    Optional static MAC for the LAN adapter.
+
+    If the seed was staged with --wan-mac / --lan-mac, pass the same
+    addresses here (the stager's closing hint does): the guest then names
+    its interfaces by MAC, so a seed MAC that no adapter has leaves that
+    interface unconfigured.
 
 .EXAMPLE
     .\New-LabRouter.ps1
@@ -89,6 +97,7 @@ param(
     [int]   $LanHostPrefix  = 24,
     [int]   $MemoryMB       = 1024,
     [int]   $VCpu           = 1,
+    [string]$WanMacAddress  = '',
     [string]$LanMacAddress  = ''
 )
 
@@ -101,6 +110,16 @@ function Write-Warn { param($m) Write-Host "    ! $m" -ForegroundColor Yellow }
 if (-not $BaseVhdxSource) { $BaseVhdxSource = Join-Path $IsoDir 'debian-13-router-base.vhdx' }
 if (-not $SeedIso)        { $SeedIso        = Join-Path $IsoDir "$VMName-seed.iso" }
 if (-not $LabPath)        { $LabPath        = (Get-VMHost).VirtualMachinePath }
+
+# Hyper-V wants a static MAC as 12 hex digits without separators.
+function ConvertTo-HyperVMac {
+    param([string]$Mac, [string]$Name)
+    $hex = ($Mac -replace '[:-]', '').ToUpperInvariant()
+    if ($hex -notmatch '^[0-9A-F]{12}$') { throw "-$Name '$Mac' is not a MAC address" }
+    $hex
+}
+if ($WanMacAddress) { $WanMacAddress = ConvertTo-HyperVMac $WanMacAddress 'WanMacAddress' }
+if ($LanMacAddress) { $LanMacAddress = ConvertTo-HyperVMac $LanMacAddress 'LanMacAddress' }
 
 # 1. SANITY CHECKS
 Write-Step "Sanity checks"
@@ -169,6 +188,11 @@ if ($LanHostIP) {
 Write-Step "Checking for existing VM: $VMName"
 if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
     Write-Warn "VM already exists - skipping creation. To rebuild: Remove-VM $VMName -Force"
+    # Bring an existing router's WAN guards up to date (see step 5).
+    if (Get-VMNetworkAdapter -VMName $VMName -Name 'WAN' -ErrorAction SilentlyContinue) {
+        Set-VMNetworkAdapter -VMName $VMName -Name 'WAN' -DhcpGuard On -RouterGuard On
+        Write-OK "WAN adapter: DhcpGuard, RouterGuard on"
+    }
     exit 0
 }
 
@@ -198,6 +222,14 @@ Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $false
 
 # WAN = primary NIC (already attached via New-VM). Rename for clarity.
 Rename-VMNetworkAdapter -VMName $VMName -Name 'Network Adapter' -NewName 'WAN' -ErrorAction SilentlyContinue
+if ($WanMacAddress) {
+    Set-VMNetworkAdapter -VMName $VMName -Name 'WAN' -StaticMacAddress $WanMacAddress
+}
+# The router serves DHCP and is a gateway on its LAN only. Drop any DHCP
+# offer or router advertisement it sends out of the WAN, so a mis-ordered
+# or misconfigured guest cannot hand out leases on the upstream network.
+# Set before first boot; dnsmasq only starts once cloud-init installs it.
+Set-VMNetworkAdapter -VMName $VMName -Name 'WAN' -DhcpGuard On -RouterGuard On
 
 # LAN NIC
 Add-VMNetworkAdapter -VMName $VMName -Name 'LAN' -SwitchName $LanSwitchName
@@ -224,7 +256,7 @@ Enable-VMIntegrationService -VMName $VMName -Name 'Time Synchronization'
 Enable-VMIntegrationService -VMName $VMName -Name 'Key-Value Pair Exchange'
 
 Write-OK "VM created: Gen2, $VCpu vCPU, $MemoryMB MB, SecureBoot off"
-Write-OK "NICs: WAN=$WanSwitchName  LAN=$LanSwitchName"
+Write-OK "NICs: WAN=$WanSwitchName (DhcpGuard, RouterGuard)  LAN=$LanSwitchName"
 
 # 6. START + SHOW STATUS
 Write-Step "Starting VM"

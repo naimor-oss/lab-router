@@ -40,6 +40,8 @@ DOMAIN=''
 DHCP_START=''
 DHCP_END=''
 USERNAME=''
+WAN_MAC=''
+LAN_MAC=''
 CONFIG_FILE=''
 SSH_PUBKEY_FILE=''
 STAGE_DIR=''
@@ -89,6 +91,13 @@ Options:
                            Only 'amd64' is implemented today; 'arm64' is
                            expected within ~6 months per
                            dev-commons/CONTEXT.md.
+      --wan-mac MAC        pin the WAN (eth0) to this MAC address
+      --lan-mac MAC        pin the LAN (eth1) to this MAC address
+                           With either set, network-config matches that
+                           interface by MAC instead of trusting the
+                           kernel's eth0/eth1 order. Pass the same MACs to
+                           New-LabRouter.ps1 (-WanMacAddress /
+                           -LanMacAddress); the closing hint does.
       --extra-dnsmasq FILE append raw dnsmasq snippet (merged with YAML
                            reservations/delegations if --config is also set)
   -h, --help               show this
@@ -110,6 +119,8 @@ while [[ $# -gt 0 ]]; do
         --dhcp-start)     DHCP_START="$2";      shift 2 ;;
         --dhcp-end)       DHCP_END="$2";        shift 2 ;;
         -u|--user)        USERNAME="$2";        shift 2 ;;
+        --wan-mac)        WAN_MAC="$2";         shift 2 ;;
+        --lan-mac)        LAN_MAC="$2";         shift 2 ;;
         -k|--pubkey)      SSH_PUBKEY_FILE="$2"; shift 2 ;;
         -s|--stage-dir)   STAGE_DIR="$2";       shift 2 ;;
         -a|--arch)        ARCH="$2";            shift 2 ;;
@@ -144,6 +155,8 @@ if [[ -n "$CONFIG_FILE" ]]; then
     [[ -z "$HOSTNAME"   ]] && HOSTNAME=$(yq_opt '.router.hostname')
     [[ -z "$DOMAIN"     ]] && DOMAIN=$(yq_opt   '.router.domain')
     [[ -z "$USERNAME"   ]] && USERNAME=$(yq_opt '.router.user')
+    [[ -z "$WAN_MAC"    ]] && WAN_MAC=$(yq_opt  '.router.wan.mac')
+    [[ -z "$LAN_MAC"    ]] && LAN_MAC=$(yq_opt  '.router.lans[0].mac')
 
     addr=$(yq_opt '.router.lans[0].address')   # "10.10.10.1/24"
     if [[ -n "$addr" ]]; then
@@ -200,6 +213,13 @@ if [[ -z "$DHCP_START" || -z "$DHCP_END" ]]; then
     [[ -z "$DHCP_END"   ]] && DHCP_END="$derived_end"
 fi
 
+# Optional MAC pinning, rendered into network-config.
+if [[ -n "$WAN_MAC" ]]; then WAN_MAC=$(normalize_mac "$WAN_MAC" 2>&1) || die "--wan-mac: $WAN_MAC"; fi
+if [[ -n "$LAN_MAC" ]]; then LAN_MAC=$(normalize_mac "$LAN_MAC" 2>&1) || die "--lan-mac: $LAN_MAC"; fi
+[[ -z "$WAN_MAC" || "$WAN_MAC" != "$LAN_MAC" ]] || die "--wan-mac and --lan-mac are the same address"
+WAN_MATCH_BLOCK=$(mac_match_block "$WAN_MAC" eth0)
+LAN_MATCH_BLOCK=$(mac_match_block "$LAN_MAC" eth1)
+
 FQDN="${HOSTNAME}.${DOMAIN}"
 PUBKEY_CONTENT="$(tr -d '\n' < "$SSH_PUBKEY_FILE")"
 
@@ -233,6 +253,8 @@ echo "  fqdn:         $FQDN"
 echo "  lan:          $LAN_IP/$LAN_PREFIX  (subnet $LAN_SUBNET_CIDR)"
 echo "  domain:       $DOMAIN"
 echo "  dhcp pool:    $DHCP_START .. $DHCP_END"
+echo "  wan mac:      ${WAN_MAC:-<not pinned>}"
+echo "  lan mac:      ${LAN_MAC:-<not pinned>}"
 echo "  admin user:   $USERNAME"
 echo "  pubkey:       $SSH_PUBKEY_FILE"
 echo "  stage dir:    $STAGE_DIR"
@@ -278,12 +300,13 @@ SEED_OUT="$STAGE_DIR/${HOSTNAME}-seed.iso"
 
 echo "-> generating seed ISO for $HOSTNAME"
 
-# substitute_template comes from lib-derive.sh — reads the placeholders
-# from same-named env vars (HOSTNAME, FQDN, DOMAIN, LAN_IP, ...).
+# substitute_template / render_template come from lib-derive.sh — they read
+# the placeholders from same-named env vars (HOSTNAME, FQDN, LAN_IP, ...,
+# and the *_BLOCK values for the multi-line ones).
 substitute_template "$SEED_SRC/meta-data.tpl"       > "$SEED_BUILD_DIR/meta-data"
-substitute_template "$SEED_SRC/network-config.tpl"  > "$SEED_BUILD_DIR/network-config"
+render_template     "$SEED_SRC/network-config.tpl"  > "$SEED_BUILD_DIR/network-config"
 
-render_user_data "$SEED_SRC/user-data.tpl" > "$SEED_BUILD_DIR/user-data"
+render_template     "$SEED_SRC/user-data.tpl"       > "$SEED_BUILD_DIR/user-data"
 
 rm -f "$SEED_OUT"
 lab_make_seed_iso "$SEED_OUT" "$SEED_BUILD_DIR"
@@ -301,4 +324,7 @@ fi
 
 echo ""
 echo "done. On the Hyper-V host, from an elevated PowerShell:"
-echo "  & '$HOST_ISO_DIR\\lab-scripts\\New-LabRouter.ps1' -VMName $HOSTNAME -IsoDir '$HOST_ISO_DIR'"
+mac_args=''
+[[ -n "$WAN_MAC" ]] && mac_args+=" -WanMacAddress '$WAN_MAC'"
+[[ -n "$LAN_MAC" ]] && mac_args+=" -LanMacAddress '$LAN_MAC'"
+echo "  & '$HOST_ISO_DIR\\lab-scripts\\New-LabRouter.ps1' -VMName $HOSTNAME -IsoDir '$HOST_ISO_DIR'$mac_args"
