@@ -170,7 +170,7 @@ check_eq "@@SSH_PUBKEY@@ -> the pubkey content" \
 real_tpl_dir="${SCRIPT_DIR}/../templates/cloud-init"
 if [[ -d "$real_tpl_dir" ]]; then
     placeholders_used=$(grep -hoE '@@[A-Z_]+@@' "$real_tpl_dir"/*.tpl 2>/dev/null \
-        | grep -vE '^@@(EXTRA_DNSMASQ|WAN_MATCH|LAN_MATCH)@@$' \
+        | grep -vE '^@@(EXTRA_DNSMASQ|UPSTREAM_DNS|WAN_MATCH|WAN_IPV4|LAN_MATCH)@@$' \
         | sort -u)
     leaked=""
     for p in $placeholders_used; do
@@ -235,6 +235,23 @@ check_eq "block for a MAC" \
     $'match:\n  macaddress: "00:15:5d:0a:0a:01"\nset-name: eth0' \
     "$(mac_match_block 00:15:5d:0a:0a:01 eth0)"
 check_eq "empty without a MAC" "" "$(mac_match_block '' eth0)"
+
+#-------------------------------------------------------------------------------
+# is_ipv4 / is_ipv4_cidr / wan_ipv4_block / upstream_dns_block — static WAN.
+echo "== static WAN helpers =="
+is_ipv4 192.168.250.1;      check_rc "is_ipv4 accepts a dotted quad" "0" "$?"
+is_ipv4 192.168.250.256;    check_rc "is_ipv4 rejects octet > 255" "1" "$?"
+is_ipv4 192.168.250;        check_rc "is_ipv4 rejects three octets" "1" "$?"
+is_ipv4 010.1.1.1;          check_rc "is_ipv4 reads leading zeros as decimal" "0" "$?"
+is_ipv4_cidr 192.168.250.2/24; check_rc "is_ipv4_cidr accepts /24" "0" "$?"
+is_ipv4_cidr 192.168.250.2;    check_rc "is_ipv4_cidr needs a prefix" "1" "$?"
+is_ipv4_cidr 192.168.250.2/33; check_rc "is_ipv4_cidr rejects /33" "1" "$?"
+check_eq "wan_ipv4_block DHCP" "dhcp4: true" "$(wan_ipv4_block '' '' 1.1.1.1)"
+check_eq "wan_ipv4_block static" \
+    $'dhcp4: false\naddresses:\n  - 192.168.250.2/24\nroutes:\n  - to: 0.0.0.0/0\n    via: 192.168.250.1\nnameservers:\n  addresses: [1.1.1.1, 8.8.8.8]' \
+    "$(wan_ipv4_block 192.168.250.2/24 192.168.250.1 1.1.1.1,8.8.8.8)"
+check_eq "upstream_dns_block two" $'server=1.1.1.1\nserver=8.8.8.8' "$(upstream_dns_block 1.1.1.1,8.8.8.8)"
+check_eq "upstream_dns_block one" "server=10.0.0.53" "$(upstream_dns_block 10.0.0.53)"
 
 #-------------------------------------------------------------------------------
 echo

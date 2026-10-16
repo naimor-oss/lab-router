@@ -5,7 +5,8 @@ ethernets:
   # cannot swap; otherwise the kernel's enumeration order decides.
   eth0:
     @@WAN_MATCH@@
-    dhcp4: true
+    # DHCP, or the --wan-ip static address, gateway and resolvers.
+    @@WAN_IPV4@@
     dhcp6: false
   # LAN
   eth1:
