@@ -64,7 +64,7 @@ source "$SCRIPT_DIR/lib-derive.sh"
 die() { echo "error: $*" >&2; exit 1; }
 
 usage() {
-    sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '/^# Usage:/,/^#====/{/^#====/d;p;}' "$0" | sed 's/^# \{0,1\}//'
     cat <<EOF
 
 Options:

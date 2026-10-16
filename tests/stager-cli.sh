@@ -30,6 +30,7 @@ rc=$?
 check "--help exits 0 (got $rc: ${out##*$'\n'})" test "$rc" -eq 0
 check "--help prints the options" grep -q -- '--stage-dir DIR' <<< "$out"
 check "--help names LAB_ISO_DIR literally" grep -qF '$LAB_ISO_DIR' <<< "$out"
+check "--help stops at the header banner" bash -c '! grep -qE "set -euo|^=+$" <<< "$1"' _ "$out"
 
 echo ""
 echo "summary: $PASS passed, $FAIL failed"
