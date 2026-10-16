@@ -314,6 +314,11 @@ Set-VMFirmware -VMName $VMName -FirstBootDevice $drive
 # template, but disabling avoids surprises on older Hyper-V hosts.
 Set-VMFirmware -VMName $VMName -EnableSecureBoot Off
 
+# Client Hyper-V (Windows 10/11) takes an automatic checkpoint at every start,
+# which grows a differencing-disk chain under a VM that runs for weeks.
+# Standard checkpoints still work when taken on purpose.
+Set-VM -Name $VMName -AutomaticCheckpointsEnabled $false
+
 # Attach cloud-init seed ISO (SCSI DVD drive)
 Add-VMScsiController -VMName $VMName -ErrorAction SilentlyContinue | Out-Null
 Add-VMDvdDrive -VMName $VMName -Path $isoDest
