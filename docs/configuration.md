@@ -10,7 +10,7 @@ general-purpose network appliance.
 
 1. **CLI flags** (highest priority): `--hostname`, `--lan-ip`, `--lan-prefix`,
    `--domain`, `--dhcp-start`, `--dhcp-end`, `--user`, `--pubkey`,
-   `--stage-dir`.
+   `--stage-dir`, `--wan-mac`, `--lan-mac`.
 2. **`--config YAML`** (requires `yq`): single-LAN configs fill in any field
    the CLI didn't set, and render DHCP reservations + DNS delegations as
    dnsmasq lines. Multi-LAN configs are rejected for now.
@@ -30,11 +30,13 @@ router:
   user: labadmin           # optional; defaults to `id -un` on the Mac
   wan:
     mode: dhcp
+    mac: 00:15:5D:0A:0A:01     # optional; pins eth0 to this MAC
     switch: "PCI 1G Port 1"    # read by Hyper-V helper, not stager
   lans:
     - name: lab
       switch: Lab-NAT          # read by Hyper-V helper, not stager
       interface: eth1          # informational
+      mac: 00:15:5D:0A:0A:02   # optional; pins eth1 to this MAC
       address: 10.10.10.1/24
       dhcp:
         range: 10.10.10.100-10.10.10.200
@@ -52,10 +54,26 @@ router:
 ```
 
 Fields the stager actually reads: `router.hostname`, `router.domain`,
-`router.user`, `router.lans[0].address`, `router.lans[0].dhcp.range`,
+`router.user`, `router.wan.mac`, `router.lans[0].mac`,
+`router.lans[0].address`, `router.lans[0].dhcp.range`,
 `router.lans[0].dhcp.reservations`, `router.lans[0].dns.delegations`.
 Other fields (`wan.switch`, `lans[*].switch`, `lans[*].interface`) are
 reserved for the Hyper-V helper script and for future multi-LAN support.
+
+### Interface pinning
+
+Without MACs, the router trusts the kernel's order: the first adapter is
+`eth0` (WAN), the second `eth1` (LAN), and nftables and dnsmasq refer to
+those names. With `wan.mac` / `lans[0].mac` (or `--wan-mac` / `--lan-mac`),
+network-config matches each interface by MAC and renames it to
+`eth0` / `eth1`, so the order cannot swap them. Give the VM the same MACs
+(`New-LabRouter.ps1 -WanMacAddress / -LanMacAddress`; the stager's closing
+hint prints them). An interface whose MAC no adapter has stays
+unconfigured.
+
+Independently, `New-LabRouter.ps1` turns on DhcpGuard and RouterGuard for
+the WAN adapter, so the switch drops any DHCP offer or router
+advertisement the VM sends upstream.
 
 ## Not Yet Implemented
 

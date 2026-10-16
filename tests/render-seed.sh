@@ -44,6 +44,8 @@ import re, sys, yaml
 node = yaml.safe_load(open(sys.argv[1]))
 for key, idx in re.findall(r'\.([A-Za-z_][\w-]*)|\[(-?\d+)\]', sys.argv[2]):
     node = node[key] if key else node[int(idx)]
+if isinstance(node, bool):
+    node = str(node).lower()   # match yq: true/false
 print(node if not isinstance(node, (dict, list)) else yaml.safe_dump(node), end='')
 EOF
     fi
@@ -64,8 +66,8 @@ export EXTRA_DNSMASQ_BLOCK='      server=/ad.lab.example/10.9.9.10'
 
 echo "== render =="
 substitute_template "$TPL/meta-data.tpl"      > "$WORK/meta-data"
-substitute_template "$TPL/network-config.tpl" > "$WORK/network-config"
-render_user_data    "$TPL/user-data.tpl"      > "$WORK/user-data"
+render_template     "$TPL/network-config.tpl" > "$WORK/network-config"
+render_template    "$TPL/user-data.tpl"      > "$WORK/user-data"
 check "no placeholder left" \
     bash -c '! grep -h "@@[A-Z_]*@@" "$1"/meta-data "$1"/network-config "$1"/user-data | grep -v "^#"' _ "$WORK"
 check "extra dnsmasq block inserted" grep -q '^      server=/ad.lab.example/10.9.9.10$' "$WORK/user-data"
@@ -78,6 +80,19 @@ else
     check "user-data hostname"   test "$(yaml_get "$WORK/user-data" .hostname)" = router9
     check "meta-data hostname"   test "$(yaml_get "$WORK/meta-data" .local-hostname)" = router9
     check "network-config LAN"   test "$(yaml_get "$WORK/network-config" '.ethernets.eth1.addresses[0]')" = 10.9.9.1/24
+    check "network-config unpinned: no match" \
+        bash -c '! grep -q "match:\|set-name:" "$1"' _ "$WORK/network-config"
+
+    WAN_MATCH_BLOCK=$(mac_match_block 00:15:5d:0a:0a:01 eth0) \
+    LAN_MATCH_BLOCK=$(mac_match_block 00:15:5d:0a:0a:02 eth1) \
+        render_template "$TPL/network-config.tpl" > "$WORK/network-config.pinned"
+    nc="$WORK/network-config.pinned"
+    check "pinned WAN mac"      test "$(yaml_get "$nc" .ethernets.eth0.match.macaddress)" = 00:15:5d:0a:0a:01
+    check "pinned WAN set-name" test "$(yaml_get "$nc" .ethernets.eth0.set-name)" = eth0
+    check "pinned WAN dhcp4"    test "$(yaml_get "$nc" .ethernets.eth0.dhcp4)" = true
+    check "pinned LAN mac"      test "$(yaml_get "$nc" .ethernets.eth1.match.macaddress)" = 00:15:5d:0a:0a:02
+    check "pinned LAN set-name" test "$(yaml_get "$nc" .ethernets.eth1.set-name)" = eth1
+    check "pinned LAN address"  test "$(yaml_get "$nc" '.ethernets.eth1.addresses[0]')" = 10.9.9.1/24
 
     echo "== ready gate =="
     # The last runcmd entry is the gate. Point its absolute paths into
