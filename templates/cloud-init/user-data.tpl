@@ -91,6 +91,12 @@ write_files:
       dhcp-option=option:dns-server,@@LAN_IP@@
       dhcp-option=option:domain-name,@@DOMAIN@@
 
+      # The router's own name answers with its LAN IP. /etc/hosts maps the
+      # FQDN to 127.0.1.1 (cloud-init manage_etc_hosts) and dnsmasq would
+      # return both, so it is not served to the LAN.
+      no-hosts
+      host-record=@@FQDN@@,@@HOSTNAME@@,@@LAN_IP@@
+
 @@EXTRA_DNSMASQ@@
 
       # Upstream public DNS for everything else
