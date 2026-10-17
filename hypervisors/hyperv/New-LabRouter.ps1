@@ -181,4 +181,4 @@ Write-Host ""
 Write-Host "To monitor first-boot progress:" -ForegroundColor DarkGray
 Write-Host "    (Get-VMNetworkAdapter -VMName $VMName -Name LAN).IPAddresses" -ForegroundColor DarkGray
 Write-Host "    # wait for IPs to appear, then:" -ForegroundColor DarkGray
-Write-Host "    ssh <user>@<router-lan-ip> 'cat /var/log/router-ready.marker'" -ForegroundColor DarkGray
+Write-Host "    ssh <user>@<router-lan-ip> 'cloud-init status; cat /var/log/router-*.marker'" -ForegroundColor DarkGray

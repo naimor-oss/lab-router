@@ -89,6 +89,24 @@ substitute_template() {
     printf '%s\n' "$content"
 }
 
+# Render user-data.tpl ($1): replace the @@EXTRA_DNSMASQ@@ placeholder
+# line with $EXTRA_DNSMASQ_BLOCK (multi-line, already indented; the line
+# is dropped when empty), then substitute the scalar placeholders.
+#
+# awk -v can't hold a multi-line value (newline-in-string error), so the
+# block is passed via the environment and read with ENVIRON. Only the
+# placeholder LINE matches, not mentions in comments such as the file
+# header.
+render_user_data() {
+    EXTRA_DNSMASQ_BLOCK="${EXTRA_DNSMASQ_BLOCK:-}" awk '
+        /^[[:space:]]*@@EXTRA_DNSMASQ@@[[:space:]]*$/ {
+            if (ENVIRON["EXTRA_DNSMASQ_BLOCK"] != "") print ENVIRON["EXTRA_DNSMASQ_BLOCK"]
+            next
+        }
+        { print }
+    ' "$1" | substitute_template /dev/stdin
+}
+
 # Resolve --arch to the Debian cloud-image qcow2 URL. Echoes the URL
 # on success; returns rc=2 with a stderr message on unsupported arch.
 arch_to_debian_url() {

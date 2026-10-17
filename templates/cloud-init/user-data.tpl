@@ -113,11 +113,24 @@ runcmd:
   - sysctl --system
   - mkdir -p /etc/systemd/resolved.conf.d
   - systemctl restart systemd-resolved 2>/dev/null || true
-  - rm -f /etc/resolv.conf
-  - 'printf "nameserver 127.0.0.1\nsearch @@DOMAIN@@\n" > /etc/resolv.conf'
   - systemctl enable --now nftables
   - nft -f /etc/nftables.conf
   - systemctl enable --now dnsmasq
-  - 'echo "router-ready: $(date --iso-8601=seconds)" > /var/log/router-ready.marker'
+  # Ready only if both services run. If package install failed (e.g. no
+  # WAN lease), keep the image's resolver, write router-failed.marker and
+  # exit non-zero so `cloud-init status` reports the error.
+  - |
+    rm -f /var/log/router-ready.marker /var/log/router-failed.marker
+    down=''
+    for unit in nftables dnsmasq; do
+      systemctl is-active --quiet "$unit" || down="$down $unit"
+    done
+    if [ -n "$down" ]; then
+      echo "router-failed: $(date -Iseconds) inactive:$down" > /var/log/router-failed.marker
+      exit 1
+    fi
+    rm -f /etc/resolv.conf
+    printf "nameserver 127.0.0.1\nsearch @@DOMAIN@@\n" > /etc/resolv.conf
+    echo "router-ready: $(date -Iseconds)" > /var/log/router-ready.marker
 
 final_message: "@@HOSTNAME@@ up in $UPTIME seconds (cloud-init)"

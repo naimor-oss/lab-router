@@ -283,19 +283,7 @@ echo "-> generating seed ISO for $HOSTNAME"
 substitute_template "$SEED_SRC/meta-data.tpl"       > "$SEED_BUILD_DIR/meta-data"
 substitute_template "$SEED_SRC/network-config.tpl"  > "$SEED_BUILD_DIR/network-config"
 
-# user-data.tpl has a multi-line @@EXTRA_DNSMASQ@@ placeholder that sed can't
-# easily insert multi-line content for. awk -v can't hold a multi-line value
-# (newline-in-string error), so pass via environment and use ENVIRON.
-EXTRA_DNSMASQ_BLOCK="$EXTRA_DNSMASQ_BLOCK" \
-awk '
-    # Only match the PLACEHOLDER LINE (after any leading whitespace), not
-    # occurrences in comments like the file header "Placeholders: ... @@EXTRA_DNSMASQ@@".
-    /^[[:space:]]*@@EXTRA_DNSMASQ@@[[:space:]]*$/ {
-        if (ENVIRON["EXTRA_DNSMASQ_BLOCK"] != "") print ENVIRON["EXTRA_DNSMASQ_BLOCK"]
-        next
-    }
-    { print }
-' "$SEED_SRC/user-data.tpl" | substitute_template /dev/stdin > "$SEED_BUILD_DIR/user-data"
+render_user_data "$SEED_SRC/user-data.tpl" > "$SEED_BUILD_DIR/user-data"
 
 rm -f "$SEED_OUT"
 lab_make_seed_iso "$SEED_OUT" "$SEED_BUILD_DIR"
