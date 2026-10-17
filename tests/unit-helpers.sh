@@ -163,14 +163,14 @@ check_eq "@@USERNAME@@ -> labadmin" \
 check_eq "@@SSH_PUBKEY@@ -> the pubkey content" \
     "key: ssh-ed25519 AAAA...test" "$(grep '^key:' <<< "$out")"
 
-# Invariant: every placeholder used in real templates has a sed -e
-# in substitute_template. If a future template adds @@FOO@@ but the
+# Invariant: every scalar placeholder used in real templates has a line
+# in substitute_template (block placeholders go through render_template). If a future template adds @@FOO@@ but the
 # helper isn't updated, the placeholder leaks through unsubstituted.
 # This is the cheap regression catcher.
 real_tpl_dir="${SCRIPT_DIR}/../templates/cloud-init"
 if [[ -d "$real_tpl_dir" ]]; then
     placeholders_used=$(grep -hoE '@@[A-Z_]+@@' "$real_tpl_dir"/*.tpl 2>/dev/null \
-        | grep -v '^@@EXTRA_DNSMASQ@@$' \
+        | grep -vE '^@@(EXTRA_DNSMASQ|WAN_MATCH|LAN_MATCH)@@$' \
         | sort -u)
     leaked=""
     for p in $placeholders_used; do
@@ -220,6 +220,21 @@ USERNAME='user&amp'
 out_amp=$(substitute_template "$fixture")
 check_eq "values containing '&' flow through verbatim (no sed-backreference)" \
     "user: user&amp" "$(grep '^user:' <<< "$out_amp")"
+
+#-------------------------------------------------------------------------------
+# normalize_mac / mac_match_block — MAC pinning for network-config.
+echo "== normalize_mac =="
+check_eq "colons, upper case" "00:15:5d:0a:0a:01" "$(normalize_mac 00:15:5D:0A:0A:01)"
+check_eq "dashes"             "00:15:5d:0a:0a:01" "$(normalize_mac 00-15-5D-0A-0A-01)"
+check_eq "Hyper-V form"       "00:15:5d:0a:0a:01" "$(normalize_mac 00155D0A0A01)"
+normalize_mac 00:15:5d:0a:0a 2>/dev/null; check_rc "too short rejected" "2" "$?"
+normalize_mac 00:15:5d:0a:0a:zz 2>/dev/null; check_rc "non-hex rejected" "2" "$?"
+
+echo "== mac_match_block =="
+check_eq "block for a MAC" \
+    $'match:\n  macaddress: "00:15:5d:0a:0a:01"\nset-name: eth0' \
+    "$(mac_match_block 00:15:5d:0a:0a:01 eth0)"
+check_eq "empty without a MAC" "" "$(mac_match_block '' eth0)"
 
 #-------------------------------------------------------------------------------
 echo
