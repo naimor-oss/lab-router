@@ -93,7 +93,7 @@ substitute_template() {
 # substitute the scalar ones (substitute_template).
 #
 # A block placeholder is a line holding only @@NAME@@ where NAME is one
-# of EXTRA_DNSMASQ, WAN_MATCH, LAN_MATCH. It is replaced by the
+# of EXTRA_DNSMASQ, UPSTREAM_DNS, WAN_MATCH, WAN_IPV4, LAN_MATCH. It is replaced by the
 # multi-line value of $NAME_BLOCK, each line prefixed with the
 # placeholder's own indentation, or dropped when that value is empty.
 # Mentions in comments (e.g. a file header listing placeholders) are
@@ -101,10 +101,12 @@ substitute_template() {
 # passed via the environment and read with ENVIRON.
 render_template() {
     EXTRA_DNSMASQ_BLOCK="${EXTRA_DNSMASQ_BLOCK:-}" \
+    UPSTREAM_DNS_BLOCK="${UPSTREAM_DNS_BLOCK:-}" \
     WAN_MATCH_BLOCK="${WAN_MATCH_BLOCK:-}" \
+    WAN_IPV4_BLOCK="${WAN_IPV4_BLOCK:-}" \
     LAN_MATCH_BLOCK="${LAN_MATCH_BLOCK:-}" \
     awk '
-        match($0, /^[[:space:]]*@@(EXTRA_DNSMASQ|WAN_MATCH|LAN_MATCH)@@[[:space:]]*$/) {
+        match($0, /^[[:space:]]*@@(EXTRA_DNSMASQ|UPSTREAM_DNS|WAN_MATCH|WAN_IPV4|LAN_MATCH)@@[[:space:]]*$/) {
             indent = $0; sub(/[^[:space:]].*$/, "", indent)
             name = $0; gsub(/[[:space:]@]/, "", name)
             block = ENVIRON[name "_BLOCK"]
@@ -138,6 +140,46 @@ normalize_mac() {
 mac_match_block() {
     [[ -n "$1" ]] || return 0
     printf 'match:\n  macaddress: "%s"\nset-name: %s' "$1" "$2"
+}
+
+# Succeed if $1 is a dotted-quad IPv4 address (each octet 0-255).
+is_ipv4() {
+    local a b c d extra
+    [[ "$1" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || return 1
+    IFS='.' read -r a b c d extra <<< "$1"
+    (( 10#$a <= 255 && 10#$b <= 255 && 10#$c <= 255 && 10#$d <= 255 ))
+}
+
+# Succeed if $1 is IPv4/prefix with a prefix of 1-32.
+is_ipv4_cidr() {
+    local ip="${1%/*}" prefix="${1#*/}"
+    [[ "$1" == */* && "$prefix" =~ ^[0-9]{1,2}$ ]] || return 1
+    is_ipv4 "$ip" && (( 10#$prefix >= 1 && 10#$prefix <= 32 ))
+}
+
+# Echo the network-config IPv4 lines for the WAN (eth0). The default
+# route is spelled 0.0.0.0/0: cloud-init's own parser (networkd and
+# other non-netplan renderers) rejects netplan's `to: default`.
+#   $1 = address/prefix ('' = DHCP), $2 = gateway, $3 = comma-separated
+#   resolvers (static mode only: there is no lease to supply them, and
+#   first boot needs DNS to install packages).
+# Validation is the caller's job.
+wan_ipv4_block() {
+    if [[ -z "$1" ]]; then
+        printf 'dhcp4: true'
+        return 0
+    fi
+    printf 'dhcp4: false\naddresses:\n  - %s\nroutes:\n  - to: 0.0.0.0/0\n    via: %s\nnameservers:\n  addresses: [%s]' \
+        "$1" "$2" "${3//,/, }"
+}
+
+# Echo dnsmasq server= lines, one per comma-separated resolver in $1.
+upstream_dns_block() {
+    local IFS=',' ip out=''
+    for ip in $1; do
+        out+="${out:+$'\n'}server=$ip"
+    done
+    printf '%s' "$out"
 }
 
 # Resolve --arch to the Debian cloud-image qcow2 URL. Echoes the URL

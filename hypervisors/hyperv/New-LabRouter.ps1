@@ -48,6 +48,22 @@
     switch, client Hyper-V's 'Default Switch' (its DHCP needs Internet
     Connection Sharing); otherwise the script stops and lists the switches.
 
+.PARAMETER CreateWanNat
+    Give the router a private uplink instead of an existing switch: create
+    the Internal switch -WanSwitchName (default Lab-WAN) if missing, give
+    the host's vNIC on it the -WanNatGateway address, and add a WinNAT
+    (New-NetNat) for that subnet. WinNAT does not depend on Internet
+    Connection Sharing, so this works where the Default Switch has no
+    DHCP. There is no DHCP on this switch: stage the seed with a static
+    WAN, e.g. --wan-ip 192.168.250.2/24 --wan-gateway 192.168.250.1.
+    Idempotent. Windows allows few NAT networks per host (WSL2 or
+    container runtimes may already own one); if New-NetNat refuses, the
+    error lists the existing ones.
+
+.PARAMETER WanNatGateway
+    Host address and prefix on the WinNAT WAN switch, which the router uses
+    as its gateway (-CreateWanNat only). Default: 192.168.250.1/24.
+
 .PARAMETER LanHostIP
     Optional static IPv4 address for the host's own vNIC on the LAN switch
     (vEthernet (<LanSwitchName>)), so the host can reach the lab directly.
@@ -81,6 +97,10 @@
     .\New-LabRouter.ps1
 
 .EXAMPLE
+    .\New-LabRouter.ps1 -CreateWanNat -LanHostIP 10.10.10.2
+    # seed staged with --wan-ip 192.168.250.2/24 --wan-gateway 192.168.250.1
+
+.EXAMPLE
     .\New-LabRouter.ps1 -VMName router2 -IsoDir E:\Lab\ISO -WanSwitchName External -LanHostIP 10.10.20.2
 #>
 [CmdletBinding()]
@@ -92,6 +112,8 @@ param(
     [string]$LabPath        = '',
     [string]$LanSwitchName  = 'Lab-NAT',
     [string]$WanSwitchName  = '',
+    [switch]$CreateWanNat,
+    [string]$WanNatGateway  = '192.168.250.1/24',
     [string]$LanHostIP      = '',
     [ValidateRange(1, 32)]
     [int]   $LanHostPrefix  = 24,
@@ -118,6 +140,37 @@ function ConvertTo-HyperVMac {
     if ($hex -notmatch '^[0-9A-F]{12}$') { throw "-$Name '$Mac' is not a MAC address" }
     $hex
 }
+# "a.b.c.d/len" of the network that IP/Prefix is in.
+function Get-IPv4Network {
+    param([string]$IP, [int]$Prefix)
+    $b = ([System.Net.IPAddress]::Parse($IP)).GetAddressBytes()
+    for ($i = 0; $i -lt 4; $i++) {
+        $bits = [Math]::Max(0, [Math]::Min(8, $Prefix - 8 * $i))
+        $b[$i] = $b[$i] -band ((0xFF -shl (8 - $bits)) -band 0xFF)
+    }
+    "$([System.Net.IPAddress]::new($b))/$Prefix"
+}
+
+# Give the host's vNIC on an Internal switch exactly this IPv4 address.
+# No -DefaultGateway: the host keeps its own default route. DNS
+# registration is off to keep lab addresses out of the host's DNS.
+function Initialize-HostVNicIPv4 {
+    param($Switch, [string]$IP, [int]$Prefix, [string]$Param)
+    if ($Switch.SwitchType -ne 'Internal') {
+        throw "-$Param needs an Internal switch; '$($Switch.Name)' is $($Switch.SwitchType)."
+    }
+    $hostIf = "vEthernet ($($Switch.Name))"
+    if (Get-NetIPAddress -InterfaceAlias $hostIf -IPAddress $IP -ErrorAction SilentlyContinue) {
+        Write-OK "Host vNIC already has $IP"
+    } else {
+        Get-NetIPAddress -InterfaceAlias $hostIf -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Remove-NetIPAddress -Confirm:$false
+        New-NetIPAddress -InterfaceAlias $hostIf -IPAddress $IP -PrefixLength $Prefix | Out-Null
+        Write-OK "Host vNIC: $IP/$Prefix on $hostIf"
+    }
+    Set-DnsClient -InterfaceAlias $hostIf -RegisterThisConnectionsAddress $false
+}
+
 if ($WanMacAddress) { $WanMacAddress = ConvertTo-HyperVMac $WanMacAddress 'WanMacAddress' }
 if ($LanMacAddress) { $LanMacAddress = ConvertTo-HyperVMac $LanMacAddress 'LanMacAddress' }
 
@@ -129,7 +182,37 @@ if (-not (Test-Path $BaseVhdxSource)) {
 if (-not (Test-Path $SeedIso)) {
     throw "Seed ISO not found at $SeedIso. Stage it with scripts/stage-router-artifacts.sh first."
 }
-if (-not $WanSwitchName) {
+if ($CreateWanNat) {
+    if (-not $WanSwitchName) { $WanSwitchName = 'Lab-WAN' }
+    if ($WanSwitchName -eq $LanSwitchName) { throw "-WanSwitchName and -LanSwitchName are both '$LanSwitchName'" }
+    $natIP, $natLen = $WanNatGateway -split '/'
+    if (-not $natLen -or -not ($natIP -as [System.Net.IPAddress]) -or [int]$natLen -lt 1 -or [int]$natLen -gt 30) {
+        throw "-WanNatGateway must be IPv4/prefix, e.g. 192.168.250.1/24 (got '$WanNatGateway')"
+    }
+    $natPrefix = Get-IPv4Network $natIP ([int]$natLen)
+
+    Write-Step "WinNAT WAN switch: $WanSwitchName ($natPrefix via $natIP)"
+    $wanSw = Get-VMSwitch -Name $WanSwitchName -ErrorAction SilentlyContinue
+    if ($wanSw) {
+        Write-OK "Switch exists ($($wanSw.SwitchType))"
+    } else {
+        $wanSw = New-VMSwitch -Name $WanSwitchName -SwitchType Internal
+        Write-OK "Created internal switch"
+    }
+    Initialize-HostVNicIPv4 -Switch $wanSw -IP $natIP -Prefix ([int]$natLen) -Param 'CreateWanNat'
+    if (Get-NetNat | Where-Object InternalIPInterfaceAddressPrefix -eq $natPrefix) {
+        Write-OK "NetNat for $natPrefix exists"
+    } else {
+        try {
+            New-NetNat -Name "$WanSwitchName-NAT" -InternalIPInterfaceAddressPrefix $natPrefix | Out-Null
+            Write-OK "Created NetNat $WanSwitchName-NAT for $natPrefix"
+        } catch {
+            $existing = (Get-NetNat | ForEach-Object { "$($_.Name) ($($_.InternalIPInterfaceAddressPrefix))" }) -join ', '
+            throw "New-NetNat for $natPrefix failed: $_. Existing NetNat: $(if ($existing) { $existing } else { 'none' })"
+        }
+    }
+    Write-OK "Stage the seed with --wan-ip <addr in $natPrefix> --wan-gateway $natIP"
+} elseif (-not $WanSwitchName) {
     $external = @(Get-VMSwitch -SwitchType External)
     if ($external.Count -eq 1) {
         $WanSwitchName = $external[0].Name
@@ -163,21 +246,7 @@ if ($lanSw) {
 }
 
 if ($LanHostIP) {
-    if ($lanSw.SwitchType -ne 'Internal') {
-        throw "-LanHostIP needs an Internal switch; '$LanSwitchName' is $($lanSw.SwitchType)."
-    }
-    $hostIf = "vEthernet ($LanSwitchName)"
-    if (Get-NetIPAddress -InterfaceAlias $hostIf -IPAddress $LanHostIP -ErrorAction SilentlyContinue) {
-        Write-OK "Host vNIC already has $LanHostIP"
-    } else {
-        Get-NetIPAddress -InterfaceAlias $hostIf -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-            Remove-NetIPAddress -Confirm:$false
-        # No -DefaultGateway: the host keeps its own default route.
-        New-NetIPAddress -InterfaceAlias $hostIf -IPAddress $LanHostIP -PrefixLength $LanHostPrefix | Out-Null
-        Write-OK "Host vNIC: $LanHostIP/$LanHostPrefix on $hostIf"
-    }
-    # Keep the lab address out of whatever DNS the host registers with.
-    Set-DnsClient -InterfaceAlias $hostIf -RegisterThisConnectionsAddress $false
+    Initialize-HostVNicIPv4 -Switch $lanSw -IP $LanHostIP -Prefix $LanHostPrefix -Param 'LanHostIP'
 } else {
     # Left unconfigured: the VM is the sole gateway and the host needs no
     # address on this switch for the lab to work.

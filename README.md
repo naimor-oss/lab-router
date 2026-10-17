@@ -81,6 +81,12 @@ Hyper-V's default VM path (`-LabPath` to change it). Add
 it gets no gateway or DNS server, so the host's own networking is
 unchanged.
 
+No DHCP on the WAN side (for example, a Default Switch without Internet
+Connection Sharing)? Use a static WAN behind WinNAT:
+`New-LabRouter.ps1 -CreateWanNat` plus
+`--wan-ip 192.168.250.2/24 --wan-gateway 192.168.250.1` on the stager. See
+[Static WAN](docs/configuration.md#static-wan).
+
 ### On the Hyper-V host itself (WSL2)
 
 When WSL2 runs on the Hyper-V host there is no ssh hop: the ISO share is a

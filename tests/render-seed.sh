@@ -63,6 +63,9 @@ export FQDN="$HOSTNAME.$DOMAIN" DHCP_START=10.9.9.100 DHCP_END=10.9.9.200
 export USERNAME=labadmin PUBKEY_CONTENT='ssh-ed25519 AAAATEST test@example'
 export LAN_SUBNET_CIDR=10.9.9.0/24
 export EXTRA_DNSMASQ_BLOCK='      server=/ad.lab.example/10.9.9.10'
+WAN_IPV4_BLOCK=$(wan_ipv4_block '' '' 1.1.1.1,8.8.8.8)
+UPSTREAM_DNS_BLOCK=$(upstream_dns_block 1.1.1.1,8.8.8.8)
+export WAN_IPV4_BLOCK UPSTREAM_DNS_BLOCK
 
 echo "== render =="
 substitute_template "$TPL/meta-data.tpl"      > "$WORK/meta-data"
@@ -71,6 +74,8 @@ render_template    "$TPL/user-data.tpl"      > "$WORK/user-data"
 check "no placeholder left" \
     bash -c '! grep -h "@@[A-Z_]*@@" "$1"/meta-data "$1"/network-config "$1"/user-data | grep -v "^#"' _ "$WORK"
 check "extra dnsmasq block inserted" grep -q '^      server=/ad.lab.example/10.9.9.10$' "$WORK/user-data"
+check "upstream resolvers inserted" \
+    test "$(grep -c '^      server=[0-9]' "$WORK/user-data")" -eq 2
 
 if (( have_yaml == 0 )); then
     echo "  skip YAML checks (no yq or python3 PyYAML)"
@@ -80,6 +85,18 @@ else
     check "user-data hostname"   test "$(yaml_get "$WORK/user-data" .hostname)" = router9
     check "meta-data hostname"   test "$(yaml_get "$WORK/meta-data" .local-hostname)" = router9
     check "network-config LAN"   test "$(yaml_get "$WORK/network-config" '.ethernets.eth1.addresses[0]')" = 10.9.9.1/24
+    check "network-config DHCP WAN" test "$(yaml_get "$WORK/network-config" .ethernets.eth0.dhcp4)" = true
+
+    WAN_IPV4_BLOCK=$(wan_ipv4_block 192.168.250.2/24 192.168.250.1 192.0.2.53,192.0.2.54) \
+        render_template "$TPL/network-config.tpl" > "$WORK/network-config.static"
+    ns="$WORK/network-config.static"
+    check "static WAN dhcp4 off"  test "$(yaml_get "$ns" .ethernets.eth0.dhcp4)" = false
+    check "static WAN address"    test "$(yaml_get "$ns" '.ethernets.eth0.addresses[0]')" = 192.168.250.2/24
+    check "static WAN gateway"    test "$(yaml_get "$ns" '.ethernets.eth0.routes[0].via')" = 192.168.250.1
+    check "static WAN default"    test "$(yaml_get "$ns" '.ethernets.eth0.routes[0].to')" = 0.0.0.0/0
+    check "static WAN resolver 2" test "$(yaml_get "$ns" '.ethernets.eth0.nameservers.addresses[1]')" = 192.0.2.54
+    check "static WAN LAN intact" test "$(yaml_get "$ns" '.ethernets.eth1.addresses[0]')" = 10.9.9.1/24
+
     check "network-config unpinned: no match" \
         bash -c '! grep -q "match:\|set-name:" "$1"' _ "$WORK/network-config"
 
