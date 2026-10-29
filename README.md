@@ -73,6 +73,60 @@ cp hypervisors/hyperv/New-LabRouter.ps1 /Volumes/ISO/lab-scripts/
 ssh <host-user>@<hyper-v-host> 'pwsh -File D:\ISO\lab-scripts\New-LabRouter.ps1'
 ```
 
+`New-LabRouter.ps1` reads the VHDX and `<VMName>-seed.iso` from `-IsoDir`
+(default `D:\ISO`), attaches the WAN to the host's only External switch
+(pass `-WanSwitchName` when there are several), and keeps VM files under
+Hyper-V's default VM path (`-LabPath` to change it). Add
+`-LanHostIP 10.10.10.2` to give the host itself an address on the lab LAN;
+it gets no gateway or DNS server, so the host's own networking is
+unchanged.
+
+No DHCP on the WAN side (for example, a Default Switch without Internet
+Connection Sharing)? Use a static WAN behind WinNAT:
+`New-LabRouter.ps1 -CreateWanNat` plus
+`--wan-ip 192.168.250.2/24 --wan-gateway 192.168.250.1` on the stager. See
+[Static WAN](docs/configuration.md#static-wan).
+
+### On the Hyper-V host itself (WSL2)
+
+When WSL2 runs on the Hyper-V host there is no ssh hop: the ISO share is a
+local drive (`/mnt/d/ISO` is `D:\ISO`). Stage from WSL2 and copy the script
+next to the artifacts:
+
+```bash
+scripts/stage-router-artifacts.sh --config configs/samba-addc.yaml
+mkdir -p /mnt/d/ISO/lab-scripts
+cp hypervisors/hyperv/New-LabRouter.ps1 /mnt/d/ISO/lab-scripts/
+```
+
+`New-LabRouter.ps1` needs an elevated session (`#Requires
+-RunAsAdministrator`). Windows programs started from WSL2 run with the
+WSL2 session's unelevated token, so `powershell.exe -File ...` from the
+WSL2 shell stops at that check. Either:
+
+- open PowerShell as administrator and run the line the stager printed, or
+- start it from WSL2 through a UAC prompt:
+
+  ```bash
+  powershell.exe -NoProfile -Command "Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-NoExit','-File','D:\ISO\lab-scripts\New-LabRouter.ps1','-VMName','router1','-IsoDir','D:\ISO'"
+  ```
+
+  The elevated script runs in a new window, and its output does not come
+  back to the WSL2 terminal. `-NoExit` keeps that window open so you can
+  read the result. For a log you can read from WSL2, call the script from
+  a small wrapper that uses `Start-Transcript -Path D:\ISO\logs\...` and
+  run the wrapper the same way.
+
+`-ExecutionPolicy Bypass` applies to that one process only. It is needed
+where the machine policy blocks unsigned local scripts (Windows PowerShell
+defaults to `Restricted` on client editions).
+
+Without an ssh hop, verify against the router's WAN address (nftables
+allows ssh there), which an elevated
+`(Get-VMNetworkAdapter -VMName router1 -Name WAN).IPAddresses` shows.
+Alternatively, pass `-LanHostIP` so the host can reach the router's LAN
+address directly.
+
 Verify (replace `<user>` with the admin username you passed to the stager):
 
 ```bash

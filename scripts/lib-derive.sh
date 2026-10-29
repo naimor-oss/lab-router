@@ -89,22 +89,97 @@ substitute_template() {
     printf '%s\n' "$content"
 }
 
-# Render user-data.tpl ($1): replace the @@EXTRA_DNSMASQ@@ placeholder
-# line with $EXTRA_DNSMASQ_BLOCK (multi-line, already indented; the line
-# is dropped when empty), then substitute the scalar placeholders.
+# Render a seed template ($1): expand the block placeholders, then
+# substitute the scalar ones (substitute_template).
 #
-# awk -v can't hold a multi-line value (newline-in-string error), so the
-# block is passed via the environment and read with ENVIRON. Only the
-# placeholder LINE matches, not mentions in comments such as the file
-# header.
-render_user_data() {
-    EXTRA_DNSMASQ_BLOCK="${EXTRA_DNSMASQ_BLOCK:-}" awk '
-        /^[[:space:]]*@@EXTRA_DNSMASQ@@[[:space:]]*$/ {
-            if (ENVIRON["EXTRA_DNSMASQ_BLOCK"] != "") print ENVIRON["EXTRA_DNSMASQ_BLOCK"]
+# A block placeholder is a line holding only @@NAME@@ where NAME is one
+# of EXTRA_DNSMASQ, UPSTREAM_DNS, WAN_MATCH, WAN_IPV4, LAN_MATCH. It is replaced by the
+# multi-line value of $NAME_BLOCK, each line prefixed with the
+# placeholder's own indentation, or dropped when that value is empty.
+# Mentions in comments (e.g. a file header listing placeholders) are
+# left alone. awk -v can't hold a multi-line value, so the blocks are
+# passed via the environment and read with ENVIRON.
+render_template() {
+    EXTRA_DNSMASQ_BLOCK="${EXTRA_DNSMASQ_BLOCK:-}" \
+    UPSTREAM_DNS_BLOCK="${UPSTREAM_DNS_BLOCK:-}" \
+    WAN_MATCH_BLOCK="${WAN_MATCH_BLOCK:-}" \
+    WAN_IPV4_BLOCK="${WAN_IPV4_BLOCK:-}" \
+    LAN_MATCH_BLOCK="${LAN_MATCH_BLOCK:-}" \
+    awk '
+        match($0, /^[[:space:]]*@@(EXTRA_DNSMASQ|UPSTREAM_DNS|WAN_MATCH|WAN_IPV4|LAN_MATCH)@@[[:space:]]*$/) {
+            indent = $0; sub(/[^[:space:]].*$/, "", indent)
+            name = $0; gsub(/[[:space:]@]/, "", name)
+            block = ENVIRON[name "_BLOCK"]
+            if (block != "") {
+                n = split(block, lines, "\n")
+                for (i = 1; i <= n; i++) print indent lines[i]
+            }
             next
         }
         { print }
     ' "$1" | substitute_template /dev/stdin
+}
+
+# Normalise a MAC address ($1) to lowercase colon form. Accepts colons,
+# dashes or no separators (Hyper-V prints 00155D0A0A01). Returns rc=2
+# with a stderr message when $1 is not 12 hex digits.
+normalize_mac() {
+    local hex
+    hex=$(printf '%s' "$1" | tr -d ':-' | tr 'A-F' 'a-f')
+    if [[ ! "$hex" =~ ^[0-9a-f]{12}$ ]]; then
+        echo "not a MAC address: $1" >&2
+        return 2
+    fi
+    printf '%s:%s:%s:%s:%s:%s' "${hex:0:2}" "${hex:2:2}" "${hex:4:2}" \
+        "${hex:6:2}" "${hex:8:2}" "${hex:10:2}"
+}
+
+# Echo the network-config lines that pin an interface to a MAC and keep
+# its kernel name: `match: {macaddress}` plus `set-name`. $1 = MAC
+# (already normalised), $2 = name. Echoes nothing when $1 is empty.
+mac_match_block() {
+    [[ -n "$1" ]] || return 0
+    printf 'match:\n  macaddress: "%s"\nset-name: %s' "$1" "$2"
+}
+
+# Succeed if $1 is a dotted-quad IPv4 address (each octet 0-255).
+is_ipv4() {
+    local a b c d extra
+    [[ "$1" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || return 1
+    IFS='.' read -r a b c d extra <<< "$1"
+    (( 10#$a <= 255 && 10#$b <= 255 && 10#$c <= 255 && 10#$d <= 255 ))
+}
+
+# Succeed if $1 is IPv4/prefix with a prefix of 1-32.
+is_ipv4_cidr() {
+    local ip="${1%/*}" prefix="${1#*/}"
+    [[ "$1" == */* && "$prefix" =~ ^[0-9]{1,2}$ ]] || return 1
+    is_ipv4 "$ip" && (( 10#$prefix >= 1 && 10#$prefix <= 32 ))
+}
+
+# Echo the network-config IPv4 lines for the WAN (eth0). The default
+# route is spelled 0.0.0.0/0: cloud-init's own parser (networkd and
+# other non-netplan renderers) rejects netplan's `to: default`.
+#   $1 = address/prefix ('' = DHCP), $2 = gateway, $3 = comma-separated
+#   resolvers (static mode only: there is no lease to supply them, and
+#   first boot needs DNS to install packages).
+# Validation is the caller's job.
+wan_ipv4_block() {
+    if [[ -z "$1" ]]; then
+        printf 'dhcp4: true'
+        return 0
+    fi
+    printf 'dhcp4: false\naddresses:\n  - %s\nroutes:\n  - to: 0.0.0.0/0\n    via: %s\nnameservers:\n  addresses: [%s]' \
+        "$1" "$2" "${3//,/, }"
+}
+
+# Echo dnsmasq server= lines, one per comma-separated resolver in $1.
+upstream_dns_block() {
+    local IFS=',' ip out=''
+    for ip in $1; do
+        out+="${out:+$'\n'}server=$ip"
+    done
+    printf '%s' "$out"
 }
 
 # Resolve --arch to the Debian cloud-image qcow2 URL. Echoes the URL

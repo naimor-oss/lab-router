@@ -2,7 +2,7 @@
 # Template consumed by lab/stage-router-artifacts.sh
 # Placeholders: @@HOSTNAME@@ @@FQDN@@ @@DOMAIN@@ @@LAN_IP@@ @@LAN_SUBNET_CIDR@@
 #               @@DHCP_START@@ @@DHCP_END@@ @@SSH_PUBKEY@@ @@USERNAME@@
-#               @@EXTRA_DNSMASQ@@
+#               @@EXTRA_DNSMASQ@@ @@UPSTREAM_DNS@@
 
 hostname: @@HOSTNAME@@
 fqdn: @@FQDN@@
@@ -99,9 +99,8 @@ write_files:
 
 @@EXTRA_DNSMASQ@@
 
-      # Upstream public DNS for everything else
-      server=1.1.1.1
-      server=8.8.8.8
+      # Upstream resolvers for everything else (--wan-dns)
+      @@UPSTREAM_DNS@@
 
       domain-needed
       bogus-priv

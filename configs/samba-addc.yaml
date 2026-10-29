@@ -9,7 +9,7 @@ router:
   domain: lab.test
   wan:
     mode: dhcp
-    switch: "PCI 1G Port 1"
+    switch: External
   lans:
     - name: lab
       switch: Lab-NAT
